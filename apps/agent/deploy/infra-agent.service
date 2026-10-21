@@ -1,0 +1,23 @@
+[Unit]
+Description=Agent Infra Manager
+Documentation=https://github.com/local/infra-manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Root est requis dans cette version : apt-get et la lecture de l'état système
+# ne sont pas délégués à un helper privilégié. Ne pas masquer cette contrainte.
+User=root
+Group=root
+WorkingDirectory=/opt/infra-agent
+Environment=CONFIG_PATH=/etc/infra-agent/config.yaml
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/infra-agent/dist/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

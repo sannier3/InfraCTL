@@ -1,0 +1,31 @@
+{
+  "name": "infra-manager",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Supervision légère et maintenance contrôlée d'une infrastructure Debian et Proxmox.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev": "pnpm --filter @infra/server dev",
+    "dev:agent": "pnpm --filter @infra/agent dev",
+    "build": "pnpm -r --filter \"./packages/*\" build && pnpm -r --filter \"./apps/*\" build",
+    "test": "pnpm -r --if-present test",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prisma:generate": "pnpm --filter @infra/server prisma:generate",
+    "prisma:migrate": "pnpm --filter @infra/server prisma:migrate",
+    "agent:register": "pnpm --filter @infra/server agent:register"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.21.0",
+    "eslint": "^9.21.0",
+    "prettier": "^3.5.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.25.0"
+  }
+}

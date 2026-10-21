@@ -1,0 +1,36 @@
+server:
+  protocol: http
+  host: 10.0.0.10
+  port: 8080
+  requestTimeoutMs: 30000
+  longPollTimeoutMs: 45000
+
+agent:
+  id: vm-web-01
+  name: vm-web-01
+  type: linux-node
+  secret: dev-agent-secret-change
+  version: 1.0.0
+
+machine:
+  type: VM
+  displayName: vm-web-01
+
+intervals:
+  heartbeatSeconds: 10
+  inventorySeconds: 30
+  resourcesSeconds: 30
+
+concurrency:
+  total: 4
+  apt: 2
+
+metrics:
+  source: LOCAL_AGENT
+
+proxmox:
+  enabled: false
+  clusterId: production
+  vmid: 212
+
+logLevel: info

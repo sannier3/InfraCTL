@@ -1,0 +1,23 @@
+services:
+  mariadb:
+    image: mariadb:11
+    container_name: infra-manager-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: infra_manager
+      MARIADB_USER: infra
+      MARIADB_PASSWORD: infra_dev_password
+      MARIADB_ROOT_PASSWORD: infra_root_dev_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  mariadb_data:

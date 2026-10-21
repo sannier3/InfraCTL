@@ -1,0 +1,321 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum AgentType {
+  proxmox_node
+  linux_node
+}
+
+enum AgentPresence {
+  ONLINE
+  UNREACHABLE
+  OFFLINE
+}
+
+enum MachineType {
+  PROXMOX_NODE
+  LXC
+  VM
+  PHYSICAL
+}
+
+enum MachineStatus {
+  RUNNING
+  STOPPED
+  UNKNOWN
+  OFFLINE
+}
+
+enum MetricsSource {
+  PROXMOX
+  LOCAL_AGENT
+}
+
+enum GuestType {
+  LXC
+  QEMU
+}
+
+enum ClusterType {
+  PROXMOX
+}
+
+enum ActionCategory {
+  READ
+  WRITE
+  CRITICAL
+}
+
+enum JobStatus {
+  QUEUED
+  ASSIGNED
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED
+  INTERRUPTED
+  UNKNOWN
+  CANCELLED
+  REQUIRES_CONFIRMATION
+}
+
+enum JobExecutionKind {
+  PARENT
+  LEAF
+}
+
+enum LogStream {
+  STDOUT
+  STDERR
+  SYSTEM
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+/// Identifiant opérateur (slug ou UUID). Le secret n'est pas dans cette table.
+model Agent {
+  id                String         @id
+  name              String
+  type              AgentType
+  version           String         @default("0.0.0")
+  presence          AgentPresence  @default(OFFLINE)
+  lastSeenAt        DateTime?
+  registeredAt      DateTime       @default(now())
+  maxConcurrency    Int            @default(4)
+  capabilities      Json
+  reportedRunning   Int            @default(0)
+  reportedQueued    Int            @default(0)
+  reportedCapacity  Int            @default(0)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  credential        AgentCredential?
+  machines          Machine[]
+  jobs              Job[]
+  nonces            AgentNonce[]
+  nodes             ProxmoxNode[]
+  alerts            Alert[]
+
+  @@index([presence])
+}
+
+/// Secret HMAC chiffré. Jamais renvoyé par l'API.
+model AgentCredential {
+  agentId            String   @id
+  secretCiphertext   String   @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  agent              Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+model AgentNonce {
+  id        String   @id @default(uuid())
+  agentId   String
+  nonce     String
+  timestamp DateTime
+  expiresAt DateTime
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, nonce])
+  @@index([expiresAt])
+}
+
+model Cluster {
+  id        String            @id @default(uuid())
+  name      String
+  slug      String            @unique
+  type      ClusterType
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  nodes     ProxmoxNode[]
+  links     MachineProxmoxLink[]
+  alerts    Alert[]
+}
+
+model ProxmoxNode {
+  id        String               @id @default(uuid())
+  clusterId String
+  name      String
+  machineId String               @unique
+  agentId   String?
+  version   String?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  cluster   Cluster              @relation(fields: [clusterId], references: [id], onDelete: Restrict)
+  machine   Machine              @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  agent     Agent?               @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  guests    MachineProxmoxLink[] @relation("GuestOnNode")
+
+  @@unique([clusterId, name])
+  @@index([agentId])
+}
+
+model Machine {
+  id                String               @id @default(uuid())
+  hostname          String
+  displayName       String
+  type              MachineType
+  status            MachineStatus
+  metricsSource     MetricsSource
+  agentId           String?
+  lastSeenAt        DateTime?
+  lastStateChangeAt DateTime             @default(now())
+  hiddenAt          DateTime?
+  details           Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  agent             Agent?               @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  proxmoxNode       ProxmoxNode?
+  proxmoxLink       MachineProxmoxLink?
+  metrics           Metric[]
+  jobs              Job[]
+  updates           UpdateSnapshot[]
+  alerts            Alert[]
+
+  @@index([agentId])
+  @@index([status, hiddenAt])
+  @@index([type])
+}
+
+/// Identité stable d'un guest : clusterId + vmid. Le nœud courant est dynamique.
+model MachineProxmoxLink {
+  machineId     String
+  clusterId     String
+  currentNodeId String?
+  vmid          Int
+  guestType     GuestType
+  machine       Machine      @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  cluster       Cluster      @relation(fields: [clusterId], references: [id], onDelete: Restrict)
+  currentNode   ProxmoxNode? @relation("GuestOnNode", fields: [currentNodeId], references: [id], onDelete: SetNull)
+
+  @@id([machineId])
+  @@unique([clusterId, vmid])
+  @@index([currentNodeId])
+}
+
+model Metric {
+  id          String   @id @default(uuid())
+  machineId   String
+  timestamp   DateTime
+  cpuUsage    Float
+  memoryUsed  BigInt
+  memoryTotal BigInt
+  diskUsed    BigInt?
+  diskTotal   BigInt?
+  networkRx   BigInt?
+  networkTx   BigInt?
+  uptime      BigInt?
+  machine     Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@index([machineId, timestamp])
+}
+
+model UpdateSnapshot {
+  id                   String          @id @default(uuid())
+  machineId            String
+  jobId                String?
+  createdAt            DateTime        @default(now())
+  availableCount       Int
+  securityCount        Int?
+  requiresReboot       Boolean         @default(false)
+  requiresConfirmation Boolean         @default(false)
+  machine              Machine         @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  job                  Job?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  packages             UpdatePackage[]
+
+  @@index([machineId, createdAt])
+}
+
+model UpdatePackage {
+  id             String         @id @default(uuid())
+  snapshotId     String
+  name           String
+  currentVersion String?
+  newVersion     String?
+  architecture   String?
+  changeType     String
+  security       Boolean        @default(false)
+  snapshot       UpdateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId])
+}
+
+model Job {
+  id                  String            @id @default(uuid())
+  parentId            String?
+  action              String
+  category            ActionCategory
+  executionKind       JobExecutionKind
+  agentId             String?
+  machineId           String?
+  targetType          String
+  targetData          Json
+  status              JobStatus
+  requestedBy         String?
+  createdAt           DateTime          @default(now())
+  assignedAt          DateTime?
+  dispatchedAt        DateTime?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  acknowledgedAt      DateTime?
+  resolvedExecutable  String?
+  resolvedArguments   Json?
+  result              Json?
+  exitCode            Int?
+  durationMs          Int?
+  errorCode           String?
+  errorMessage        String?           @db.Text
+  parent              Job?              @relation("JobTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children            Job[]             @relation("JobTree")
+  agent               Agent?            @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  machine             Machine?          @relation(fields: [machineId], references: [id], onDelete: SetNull)
+  logs                JobLog[]
+  updates             UpdateSnapshot[]
+
+  @@index([status, createdAt])
+  @@index([agentId, status])
+  @@index([machineId, status])
+  @@index([parentId])
+}
+
+model JobLog {
+  id        String    @id @default(uuid())
+  jobId     String
+  sequence  Int
+  timestamp DateTime
+  stream    LogStream
+  data      String    @db.Text
+  job       Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, sequence])
+  @@index([jobId, sequence])
+}
+
+model Alert {
+  id             String        @id @default(uuid())
+  dedupeKey      String        @unique
+  severity       AlertSeverity
+  title          String
+  message        String        @db.Text
+  machineId      String?
+  agentId        String?
+  clusterId      String?
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  machine        Machine?      @relation(fields: [machineId], references: [id], onDelete: SetNull)
+  agent          Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  cluster        Cluster?      @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+
+  @@index([resolvedAt])
+}

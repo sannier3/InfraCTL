@@ -1,0 +1,45 @@
+server:
+  bind: 0.0.0.0
+  port: 8080
+  logLevel: info
+  exposeSwagger: true
+
+database:
+  url: mysql://infra:infra_dev_password@127.0.0.1:3306/infra_manager
+
+auth:
+  # Jeton de l'API de gestion. Le remplacer avant tout usage réel.
+  apiToken: dev-admin-token-change
+  # Jeton optionnel, limité aux lectures et aux actions READ.
+  readToken: dev-reader-token-change
+
+security:
+  # 32 octets en base64, UNIQUEMENT pour le développement.
+  # Production : node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+  credentialsKey: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+  hmacWindowSeconds: 60
+  longPollSeconds: 30
+  dispatchLeaseSeconds: 120
+
+agents:
+  unreachableAfterSeconds: 30
+  offlineAfterSeconds: 60
+
+inventory:
+  hideStoppedAfterSeconds: 300
+
+metrics:
+  retentionDays: 7
+
+concurrency:
+  global: 20
+  perAgent: 4
+  perProxmoxNode: 4
+  aptPerProxmoxNode: 2
+  perMachineWrite: 1
+  proxmoxHostMaintenancePerCluster: 1
+
+scheduler:
+  tickMs: 1000
+  noncePurgeEveryTicks: 60
+  metricPurgeEveryTicks: 3600
