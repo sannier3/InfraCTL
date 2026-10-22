@@ -1,3 +1,4 @@
+import type { Capability } from "@infra/types";
 import { agentJobSchema, jobStartResponseSchema, type AgentConfig, type AgentJob, type InventoryBody, type ResourcesBody } from "@infra/schemas";
 import { createNonce, headerValues, sign, splitUrl } from "@infra/protocol";
 
@@ -22,7 +23,7 @@ export class ServerClient {
     running: number;
     queued: number;
     capacity: number;
-    capabilities: Array<"system" | "apt" | "local.metrics">;
+    capabilities: Capability[];
   }): Promise<void> {
     await this.send("POST", "/api/v1/agent/heartbeat", {
       agentId: this.config.agent.id,

@@ -16,17 +16,6 @@ try {
   process.exit(1);
 }
 
-if (config.agent.type !== "linux-node") {
-  process.stderr.write(
-    `${JSON.stringify({
-      level: "error",
-      message:
-        "Cette version implémente linux-node uniquement. proxmox-node est prévu ensuite et n'exécute aucune commande.",
-    })}\n`,
-  );
-  process.exit(1);
-}
-
 const logger = createLogger({
   level: config.logLevel,
   base: { agentId: config.agent.id },

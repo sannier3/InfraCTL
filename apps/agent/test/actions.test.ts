@@ -7,11 +7,18 @@ import { parseAptSimulation } from "../src/actions/apt/parse.js";
 import { APT_CHECK_ARGS, APT_CHECK_EXECUTABLE, APT_UPGRADE_ARGS, APT_UPGRADE_EXECUTABLE } from "../src/adapters/local-linux/apt.js";
 import { cpuPercent, parseOsRelease, parseProcNetDev, parseProcStat } from "../src/adapters/local-linux/system.js";
 import type { SystemProbe } from "../src/adapters/local-linux/probe.js";
-import { interpretPctStatus, parseGuestList, pctStatusArgs } from "../src/proxmox/parse.js";
+import { interpretPctStatus, parseGuestList, parsePveVersion, pctStatusArgs } from "../src/proxmox/parse.js";
 
 const config = agentConfigSchema.parse({
   server: { protocol: "http", host: "10.0.0.10", port: 8080 },
   agent: { id: "vm-web-01", type: "linux-node", secret: "change-me-please-now" },
+  metrics: { source: "LOCAL_AGENT" },
+});
+
+const proxmoxConfig = agentConfigSchema.parse({
+  server: { protocol: "http", host: "10.0.0.10", port: 8080 },
+  agent: { id: "pve-r730", type: "proxmox-node", secret: "change-me-please-now" },
+  proxmox: { enabled: true, clusterId: "pve" },
   metrics: { source: "LOCAL_AGENT" },
 });
 
@@ -146,6 +153,57 @@ describe("apt.upgrade", () => {
     expect(outcome.status).toBe("SKIPPED");
     expect(outcome.errorCode).toBe("INCOMPATIBLE_TARGET");
   });
+
+  it("passe par pct exec sur un LXC quand l'agent est proxmox-node", async () => {
+    const runner = new FakeProcessRunner(async (request) => ({
+      exitCode: 0,
+      stdout: request.args[0] === "status" ? "status: running\n" : request.args.includes("-s") ? "Inst bash [1] (2 Debian:12/stable [amd64])\n" : "",
+      stderr: "",
+      durationMs: 4,
+      timedOut: false,
+      signal: null,
+    }));
+    const outcome = await runRegisteredAction({
+      job: {
+        ...job(),
+        action: "apt.upgrade",
+        category: "WRITE",
+        target: {
+          ...job().target,
+          machineType: "LXC",
+          guest: { vmid: 101, guestType: "LXC", clusterId: "5f0b6b0a-2a7e-4c1d-9c2a-1b0d5e6f7a8d" },
+        },
+      },
+      runner,
+      probe: probe(),
+      config: proxmoxConfig,
+      signal: new AbortController().signal,
+      log: () => undefined,
+    });
+    expect(outcome.status).toBe("SUCCESS");
+    expect(runner.calls[0]?.args).toEqual(["status", "101"]);
+    const simulation = runner.calls.find((call) => call.args.includes("-s"));
+    const upgrade = runner.calls.find((call) => call.args.includes("upgrade") && !call.args.includes("-s"));
+    expect(simulation?.args.slice(0, 4)).toEqual(["exec", "101", "--", "apt-get"]);
+    expect(upgrade?.args.slice(0, 4)).toEqual(["exec", "101", "--", "apt-get"]);
+    expect(runner.calls.every((call) => call.executable === "pct")).toBe(true);
+  });
+
+  it("refuse une unité systemd invalide sans lancer de processus", async () => {
+    const runner = new FakeProcessRunner(async () => {
+      throw new Error("ne doit pas être appelé");
+    });
+    const outcome = await runRegisteredAction({
+      job: { ...job(), action: "systemd.restart", category: "WRITE", target: { ...job().target, parameters: { unit: "nginx;reboot" } } },
+      runner,
+      probe: probe(),
+      config,
+      signal: new AbortController().signal,
+      log: () => undefined,
+    });
+    expect(runner.calls).toHaveLength(0);
+    expect(outcome.errorCode).toBe("VALIDATION_ERROR");
+  });
 });
 
 describe("collecteurs locaux et Proxmox", () => {
@@ -164,6 +222,7 @@ describe("collecteurs locaux et Proxmox", () => {
   });
 
   it("parse pct list et pct status sans shell interactif", () => {
+    expect(parsePveVersion("pve-manager/9.0.11/abc123 (running kernel: 7.0.14-11-pve)\n")).toBe("9.0.11");
     expect(pctStatusArgs(101)).toEqual(["status", "101"]);
     expect(() => pctStatusArgs(1.5)).toThrow(/vmid/);
     expect(interpretPctStatus("status: running\n", "", 0)).toBe("running");
@@ -179,6 +238,48 @@ describe("collecteurs locaux et Proxmox", () => {
       { vmid: 101, name: "ct-web", status: "running", lock: null },
       { vmid: 102, name: "ct-db", status: "stopped", lock: "backup" },
     ]);
+    expect(parseGuestList(`[{"vmid":200,"status":"stopped","mem":0,"maxmem":2048,"cpu":1,"maxcpu":2}]`)).toEqual([
+      { vmid: 200, name: "200", status: "stopped", lock: null, cpu: 50, memoryUsed: 0, memoryTotal: 2048 },
+    ]);
+  });
+
+  it("inventorie les LXC et les VM via pvesh", async () => {
+    const runner = new FakeProcessRunner(async (request) => {
+      const path = request.args[1];
+      const stdout =
+        request.executable === "pveversion"
+          ? "pve-manager/9.2.21/abc123\n"
+          : path === "/nodes/localhost/lxc"
+            ? `[{"vmid":11401,"status":"running","name":"ct-a","mem":10,"maxmem":20,"cpu":0.5,"maxcpu":2}]`
+            : path === "/nodes/localhost/qemu"
+              ? `[{"vmid":200,"status":"stopped","name":"vm-b"}]`
+              : "";
+      return { exitCode: stdout.length > 0 ? 0 : 1, stdout, stderr: "", durationMs: 1, timedOut: false, signal: null };
+    });
+    const outcome = await runRegisteredAction({
+      job: {
+        ...job(),
+        action: "proxmox.inventory",
+        category: "READ",
+        target: { ...job().target, machineType: "PROXMOX_NODE", hostname: "pve-r730" },
+      },
+      runner,
+      probe: probe(),
+      config: proxmoxConfig,
+      signal: new AbortController().signal,
+      log: () => undefined,
+    });
+    expect(outcome.status).toBe("SUCCESS");
+    expect(outcome.executable).toBe("pvesh");
+    expect(outcome.args).toEqual(["get", "/nodes/localhost/lxc", "--output-format", "json"]);
+    expect(runner.calls.some((call) => call.args[1] === "/nodes/localhost/qemu")).toBe(true);
+    expect(outcome.result).toMatchObject({
+      node: { clusterId: "pve", name: "vm-web-01", version: "9.2.21" },
+      guests: [
+        { vmid: 11401, guestType: "LXC", name: "ct-a", status: "running", cpu: 25, memoryUsed: 10, memoryTotal: 20 },
+        { vmid: 200, guestType: "QEMU", name: "vm-b", status: "stopped" },
+      ],
+    });
   });
 });
 

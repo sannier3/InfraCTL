@@ -44,7 +44,7 @@ Actions réellement exécutées aujourd'hui :
 | `apt.check` | Simulation des mises à jour APT, sans installation |
 | `apt.upgrade` | Même simulation, puis `apt-get upgrade` si aucun paquet n'est retiré |
 
-Ces trois actions visent un hôte, un LXC, une VM ou une machine physique. Les autres noms (systemd, journal, Proxmox, redémarrage) existent dans le catalogue et répondent `422` avec le code `ACTION_DISABLED`.
+Les actions du catalogue sont actives. Un LXC est exécuté par `pct exec` depuis l'agent `proxmox-node` de son hôte. Une VM passe par son agent `linux-node`.
 
 ## Cycle d'une action
 

@@ -3,6 +3,12 @@ export type ListedGuest = {
   name: string;
   status: "running" | "stopped";
   lock: string | null;
+  cpu?: number;
+  memoryUsed?: number;
+  memoryTotal?: number;
+  diskUsed?: number;
+  diskTotal?: number;
+  uptime?: number;
 };
 
 const KNOWN_LOCKS = new Set([
@@ -17,12 +23,12 @@ const KNOWN_LOCKS = new Set([
   "snapshot",
 ]);
 
-export function pctListArgs(): readonly string[] {
-  return ["list", "--output-format", "json"];
+export function lxcIndexArgs(): readonly string[] {
+  return ["get", "/nodes/localhost/lxc", "--output-format", "json"];
 }
 
-export function qmListArgs(): readonly string[] {
-  return ["list", "--output-format", "json"];
+export function qemuIndexArgs(): readonly string[] {
+  return ["get", "/nodes/localhost/qemu", "--output-format", "json"];
 }
 
 export function parseGuestList(stdout: string): ListedGuest[] {
@@ -38,6 +44,15 @@ export function pctStatusArgs(vmid: number): readonly [string, string] {
     throw new Error("vmid invalide");
   }
   return ["status", String(vmid)];
+}
+
+export function parsePveVersion(stdout: string): string | null {
+  const match = /pve-manager\/([0-9][^/\s]*)/.exec(stdout);
+  const version = match?.[1];
+  if (!version || version.length > 128) {
+    return null;
+  }
+  return version;
 }
 
 export function interpretPctStatus(
@@ -74,14 +89,51 @@ function parseJsonList(stdout: string): ListedGuest[] {
     const record = item as Record<string, unknown>;
     const vmid = Number(record.vmid);
     const status = record.status;
-    const name = typeof record.name === "string" ? record.name : "";
-    if (!Number.isInteger(vmid) || (status !== "running" && status !== "stopped") || name.length === 0) {
+    if (!Number.isInteger(vmid) || vmid < 1 || (status !== "running" && status !== "stopped")) {
       continue;
     }
+    const rawName = typeof record.name === "string" ? record.name.trim() : "";
+    const name = (rawName.length > 0 ? rawName : String(vmid)).slice(0, 255);
     const lock = typeof record.lock === "string" && record.lock.length > 0 ? record.lock : null;
-    guests.push({ vmid, name, status, lock });
+    const cpu = cpuPercent(record.cpu, record.maxcpu ?? record.cpus);
+    const memoryUsed = optionalBytes(record.mem);
+    const memoryTotal = optionalBytes(record.maxmem);
+    const diskUsed = optionalBytes(record.disk);
+    const diskTotal = optionalBytes(record.maxdisk);
+    const uptime = optionalBytes(record.uptime);
+    guests.push({
+      vmid,
+      name,
+      status,
+      lock,
+      ...(cpu !== undefined ? { cpu } : {}),
+      ...(memoryUsed !== undefined ? { memoryUsed } : {}),
+      ...(memoryTotal !== undefined ? { memoryTotal } : {}),
+      ...(diskUsed !== undefined ? { diskUsed } : {}),
+      ...(diskTotal !== undefined ? { diskTotal } : {}),
+      ...(uptime !== undefined ? { uptime } : {}),
+    });
   }
   return guests;
+}
+
+function cpuPercent(cpu: unknown, cores: unknown): number | undefined {
+  if (typeof cpu !== "number" || !Number.isFinite(cpu) || cpu < 0) {
+    return undefined;
+  }
+  const allocated = typeof cores === "number" && Number.isFinite(cores) && cores > 0 ? cores : 1;
+  const percent = Math.round((cpu / allocated) * 1000) / 10;
+  if (percent > 1024) {
+    return 1024;
+  }
+  return percent;
+}
+
+function optionalBytes(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.round(value);
 }
 
 function parseTable(stdout: string): ListedGuest[] {

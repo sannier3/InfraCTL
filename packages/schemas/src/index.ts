@@ -458,6 +458,22 @@ export const agentConfigSchema = z
         path: ["proxmox", "enabled"],
       });
     }
+    if (value.agent.type === "proxmox-node") {
+      if (!value.proxmox.enabled) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "proxmox.enabled est requis pour un agent proxmox-node",
+          path: ["proxmox", "enabled"],
+        });
+      }
+      if (!value.proxmox.clusterId) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "proxmox.clusterId est requis pour un agent proxmox-node",
+          path: ["proxmox", "clusterId"],
+        });
+      }
+    }
     if (value.metrics.source === "PROXMOX") {
       if (!value.proxmox.clusterId || value.proxmox.vmid === undefined) {
         context.addIssue({
@@ -520,6 +536,7 @@ export type AgentCreateBody = z.infer<typeof agentCreateBodySchema>;
 export const agentUpdateBodySchema = z
   .object({
     name: agentNameSchema.optional(),
+    type: agentTypeSchema.optional(),
     maxConcurrency: agentConcurrencySchema.optional(),
     capabilities: agentCapabilitiesSchema.optional(),
   })

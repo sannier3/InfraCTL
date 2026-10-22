@@ -44,6 +44,7 @@ export class AgentAdmin {
   async update(id: string, body: AgentUpdateBody): Promise<AgentRecord> {
     const updated = await this.store.updateAgent(id, {
       ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.type !== undefined ? { type: body.type } : {}),
       ...(body.maxConcurrency !== undefined ? { maxConcurrency: body.maxConcurrency } : {}),
       ...(body.capabilities !== undefined ? { capabilities: [...body.capabilities] } : {}),
     });

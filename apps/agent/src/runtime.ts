@@ -1,10 +1,11 @@
-import { getAction } from "@infra/types";
+import { DEFAULT_CAPABILITIES, getAction, type Capability } from "@infra/types";
 import type { AgentConfig, InventoryBody, ResourcesBody } from "@infra/schemas";
 import { backoffDelayMs } from "@infra/utils";
 import { runRegisteredAction } from "./actions/registry.js";
 import { cpuUsageFromSamples, type CpuSample, type SystemProbe } from "./adapters/local-linux/probe.js";
 import type { ProcessRunner } from "./process/types.js";
 import type { ServerClient } from "./transport/client.js";
+import { collectProxmoxInventory } from "./proxmox/collect.js";
 import { LogShipper } from "./transport/log-shipper.js";
 import type { Logger } from "@infra/utils";
 
@@ -16,9 +17,6 @@ export async function runAgent(input: {
   logger: Logger;
   signal: AbortSignal;
 }): Promise<void> {
-  if (input.config.agent.type !== "linux-node") {
-    throw new Error("Cette version implémente uniquement linux-node. Le mode proxmox-node n'exécute encore aucune commande.");
-  }
   const state = { running: 0, apt: 0, cpu: null as CpuSample | null };
   await untilOnline(input, state);
   await sendInventory(input);
@@ -56,7 +54,19 @@ async function untilOnline(
   }
 }
 
-async function sendInventory(input: { config: AgentConfig; client: ServerClient; probe: SystemProbe }): Promise<void> {
+async function sendInventory(input: {
+  config: AgentConfig;
+  client: ServerClient;
+  probe: SystemProbe;
+  runner: ProcessRunner;
+}): Promise<void> {
+  if (input.config.agent.type === "proxmox-node") {
+    const collected = await collectProxmoxInventory(input.config, input.runner, input.probe);
+    if (collected) {
+      await input.client.inventory(collected.body);
+    }
+    return;
+  }
   const info = await input.probe.inspect();
   const body: InventoryBody = {
     hostname: info.hostname,
@@ -180,6 +190,7 @@ async function executeJob(
       config: input.config,
       signal: input.signal,
       log: (stream, data) => shipper.push(stream, data),
+      client: input.client,
     });
     await shipper.flush();
     const durationMs = Date.now() - started;
@@ -224,8 +235,8 @@ async function startWithRetry(client: ServerClient, jobId: string, signal: Abort
 }
 
 function heartbeatPayload(config: AgentConfig, state: { running: number }) {
-  const capabilities: Array<"system" | "apt" | "local.metrics"> = ["system", "apt"];
-  if (config.metrics.source === "LOCAL_AGENT") {
+  const capabilities: Capability[] = [...DEFAULT_CAPABILITIES[config.agent.type]];
+  if (config.metrics.source === "LOCAL_AGENT" && !capabilities.includes("local.metrics")) {
     capabilities.push("local.metrics");
   }
   return {

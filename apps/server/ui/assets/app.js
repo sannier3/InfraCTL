@@ -38,8 +38,23 @@ const CAPABILITIES = ["system", "apt", "systemd", "journal", "local.metrics", "p
 const SHARED_TARGETS = ["PROXMOX_NODE", "LXC", "VM", "PHYSICAL"];
 const ACTIONS = [
   { name: "system.info", label: "État du système", targets: SHARED_TARGETS },
+  { name: "system.rebootRequired", label: "Redémarrage requis", targets: SHARED_TARGETS },
+  { name: "system.reboot", label: "Redémarrer", targets: SHARED_TARGETS },
+  { name: "system.shutdown", label: "Arrêter", targets: SHARED_TARGETS },
+  { name: "apt.refresh", label: "Rafraîchir APT", targets: SHARED_TARGETS },
   { name: "apt.check", label: "Voir les mises à jour", targets: SHARED_TARGETS },
   { name: "apt.upgrade", label: "Mettre à jour", targets: SHARED_TARGETS },
+  { name: "systemd.failed", label: "Unités en échec", targets: SHARED_TARGETS },
+  { name: "systemd.serviceStatus", label: "État d'une unité", targets: SHARED_TARGETS, unit: true },
+  { name: "systemd.restart", label: "Redémarrer une unité", targets: SHARED_TARGETS, unit: true },
+  { name: "journal.system", label: "Journal système", targets: SHARED_TARGETS, lines: true },
+  { name: "journal.service", label: "Journal d'une unité", targets: SHARED_TARGETS, unit: true, lines: true },
+  { name: "proxmox.nodeInfo", label: "État du nœud", targets: ["PROXMOX_NODE"] },
+  { name: "proxmox.inventory", label: "Inventaire Proxmox", targets: ["PROXMOX_NODE"] },
+  { name: "proxmox.resources", label: "Ressources du cluster", targets: ["PROXMOX_NODE"] },
+  { name: "proxmox.host.update", label: "Mise à jour de l'hôte", targets: ["PROXMOX_NODE"] },
+  { name: "lxc.info", label: "Fiche LXC", targets: ["LXC"] },
+  { name: "lxc.resources", label: "Ressources LXC", targets: ["LXC"] },
 ];
 const TERMINAL = new Set(["SUCCESS", "FAILED", "SKIPPED", "INTERRUPTED", "UNKNOWN", "CANCELLED", "REQUIRES_CONFIRMATION"]);
 
@@ -274,7 +289,7 @@ function openAgentDialog() {
     ${field("Secret", "secret", "password", "")}
     ${field("Concurrence", "maxConcurrency", "number", "4")}
     <div class="field"><label>Capacités</label><div class="checks">${CAPABILITIES.map((item) => `<label><input type="checkbox" name="capabilities" value="${item}" ${["system", "apt", "local.metrics"].includes(item) ? "checked" : ""}/> ${item}</label>`).join("")}</div></div>
-    <p class="muted">Le mode proxmox-node peut être enregistré. L'agent de cette version refuse encore de démarrer dans ce mode.</p>
+    <p class="muted">proxmox-node surveille l'hôte et ses LXC. linux-node surveille une VM ou une machine physique.</p>
     <div class="actions"><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Enregistrer</button></div>
   </form>`, async (form) => {
     const data = formData(form);
@@ -289,13 +304,14 @@ async function openEditDialog(id) {
   const agent = await api(`/agents/${encodeURIComponent(id)}`);
   openDialog(agent.name, `<form id="dialog-form" class="form-grid">
     ${field("Nom", "name", "text", agent.name)}
+    <div class="field"><label>Type</label><select name="type"><option value="linux-node" ${agent.type === "linux-node" ? "selected" : ""}>linux-node</option><option value="proxmox-node" ${agent.type === "proxmox-node" ? "selected" : ""}>proxmox-node</option></select></div>
     ${field("Concurrence", "maxConcurrency", "number", String(agent.maxConcurrency))}
     <div class="field"><label>Capacités</label><div class="checks">${CAPABILITIES.map((item) => `<label><input type="checkbox" name="capabilities" value="${item}" ${(agent.capabilities ?? []).includes(item) ? "checked" : ""}/> ${item}</label>`).join("")}</div></div>
     <div class="field"><label>Nouveau secret</label><input name="secret" type="password" placeholder="Laisser vide pour le conserver" autocomplete="new-password" /></div>
     <div class="actions"><button class="danger" type="button" data-delete-agent="${escapeHtml(agent.id)}">Retirer</button><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Enregistrer</button></div>
   </form>`, async (form) => {
     const data = formData(form);
-    await api(`/agents/${encodeURIComponent(id)}`, { method: "PATCH", body: { name: data.name, maxConcurrency: Number(data.maxConcurrency), capabilities: data.capabilities } });
+    await api(`/agents/${encodeURIComponent(id)}`, { method: "PATCH", body: { name: data.name, type: data.type, maxConcurrency: Number(data.maxConcurrency), capabilities: data.capabilities } });
     if (data.secret) await api(`/agents/${encodeURIComponent(id)}/secret`, { method: "POST", body: { secret: data.secret } });
     toast("Agent mis à jour");
     closeDialog();
@@ -322,13 +338,18 @@ function openActionDialog(machineId, machineType) {
     <div class="field"><label>Action</label><select name="action">${options}</select></div>
     <div class="field"><label>Cible</label><select name="selector">${machineId ? "" : ""}<option value="machine">Une machine</option><option value="machines">Plusieurs machines</option><option value="fleet">Tout le parc</option><option value="cluster">Un cluster</option><option value="proxmox-node">Un nœud Proxmox</option></select></div>
     ${field("Identifiant machine ou nœud", "id", "text", machineId)}
+    ${field("Unité systemd", "unit", "text", "")}
+    ${field("Lignes de journal", "lines", "number", "100")}
     <div class="field"><label>Identifiants, un par ligne</label><textarea name="ids" rows="4"></textarea></div>
     <label class="checks"><input type="checkbox" name="includeGuests" checked /> Inclure les guests</label>
     <div class="actions"><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Lancer</button></div>
   </form>`, async (form) => {
     const data = formData(form);
     const selector = buildSelector(data);
-    const job = await api("/actions", { method: "POST", body: { action: data.action, requestedBy: "interface", selector } });
+    const parameters = {};
+    if (data.unit) parameters.unit = data.unit;
+    if (data.lines) parameters.lines = Number(data.lines);
+    const job = await api("/actions", { method: "POST", body: { action: data.action, requestedBy: "interface", selector, ...(Object.keys(parameters).length ? { parameters } : {}) } });
     closeDialog();
     go(`/ui/jobs/${encodeURIComponent(job.id)}`);
   });

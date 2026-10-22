@@ -18,14 +18,16 @@ describe("catalogue d'actions", () => {
     }
   });
 
-  it("active system.info, apt.check et apt.upgrade sur hôte, LXC et VM", () => {
+  it("active toutes les actions du catalogue", () => {
     const enabled = ACTION_NAMES.filter((name) => ACTION_CATALOG[name].enabled);
-    expect(enabled.sort()).toEqual(["apt.check", "apt.upgrade", "system.info"]);
-    for (const name of ["system.info", "apt.check", "apt.upgrade"] as const) {
+    expect(enabled.sort()).toEqual([...ACTION_NAMES].sort());
+    for (const name of ["system.info", "apt.check", "apt.upgrade", "systemd.restart"] as const) {
       expect(ACTION_CATALOG[name].supportedTargets).toEqual(
         expect.arrayContaining(["PROXMOX_NODE", "LXC", "VM", "PHYSICAL"]),
       );
     }
+    expect(ACTION_CATALOG["proxmox.inventory"].supportedTargets).toEqual(["PROXMOX_NODE"]);
+    expect(ACTION_CATALOG["lxc.info"].supportedTargets).toEqual(["LXC"]);
   });
 
   it("marque les actions mutantes comme non rejouables automatiquement", () => {

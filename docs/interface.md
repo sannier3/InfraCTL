@@ -17,4 +17,4 @@ Les écrans couvrent ce que l'API de gestion sait faire :
 
 Créer un agent ici équivaut à `pnpm agent:register`. Le secret saisi doit ensuite être recopié dans le YAML de la machine. L'écran ne le réaffiche pas.
 
-Les actions proposées sont les mêmes sur un hôte, un LXC, une VM et une machine physique : état du système, consultation APT, mise à jour APT. Le mode d'exécution `proxmox-node` reste hors service même si un agent de ce type peut déjà être enregistré. La mise à jour d'un LXC attend cet agent de nœud.
+L'hôte, le LXC, la VM et la machine physique partagent les actions système, APT, systemd et journal. Le nœud Proxmox a en plus son inventaire, ses ressources et sa mise à jour. Le LXC a sa fiche et ses ressources. Une unité systemd ou un extrait de journal se saisissent dans le formulaire.

@@ -166,7 +166,7 @@ export class InventoryService {
       displayName: body.displayName ?? body.node.name,
       type: "PROXMOX_NODE",
       status: "RUNNING",
-      metricsSource: "PROXMOX",
+      metricsSource: body.metricsSource,
       now,
       details: { ...detailsFrom(body), proxmoxVersion: body.node.version },
     });
