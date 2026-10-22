@@ -17,7 +17,7 @@ import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
 import type { Mutex } from "../lock.js";
 import { evaluateAdmission, type Limits } from "./admission.js";
-import { aggregateParentStatus, parentCounts } from "./parents.js";
+import { aggregateParentStatus, elapsedMs, parentCounts, parentOutcome } from "./parents.js";
 
 export type Principal = { kind: "admin" | "reader" };
 
@@ -30,9 +30,13 @@ export class JobService {
     private readonly store: Store,
     private readonly lock: Mutex,
     private readonly limits: Limits,
-    private readonly dispatchLeaseMs: number,
+    private dispatchLeaseMs: number,
     private readonly deadlineGraceMs: number,
   ) {}
+
+  setDispatchLeaseMs(ms: number): void {
+    this.dispatchLeaseMs = ms;
+  }
 
   run<T>(operation: () => Promise<T>): Promise<T> {
     return this.lock.run(operation);
@@ -104,6 +108,7 @@ export class JobService {
     status?: JobStatus;
     machineId?: string;
     parentId?: string;
+    rootsOnly?: boolean;
   }) {
     return this.store.listJobs(query);
   }
@@ -704,21 +709,40 @@ export class JobService {
     if (!parent || parent.executionKind !== "PARENT" || parent.status === "CANCELLED") {
       return;
     }
-    if (isTerminalStatus(parent.status) && parent.status !== "UNKNOWN") {
+    if (isTerminalStatus(parent.status) && parent.status !== "UNKNOWN" && parent.exitCode !== null && parent.durationMs !== null) {
       return;
     }
     const children = await this.store.listChildren(parent.id);
     const next = aggregateParentStatus(children.map((child) => child.status));
     const counts = parentCounts(children.map((child) => child.status));
-    if (next === parent.status) {
-      await this.store.compareAndSetJob(parent.id, parent.status, { result: { counts } });
+    const outcome = parentOutcome(children);
+    const terminal = isTerminalStatus(parent.status) && parent.status !== "UNKNOWN";
+    if (terminal) {
+      const started = parent.startedAt ?? earliestDate(children.map((child) => child.startedAt));
+      await this.store.compareAndSetJob(parent.id, parent.status, {
+        result: { counts },
+        exitCode: parent.exitCode ?? outcome.exitCode,
+        durationMs: parent.durationMs ?? elapsedMs(started, parent.finishedAt),
+        agentId: parent.agentId ?? outcome.agentId,
+      });
       return;
     }
+    if (next === parent.status) {
+      await this.store.compareAndSetJob(parent.id, parent.status, {
+        result: { counts },
+        agentId: outcome.agentId,
+      });
+      return;
+    }
+    const startedAt = next === "RUNNING" && !parent.startedAt ? now : parent.startedAt;
+    const finishedAt = isTerminalStatus(next) ? now : null;
     await this.store.compareAndSetJob(parent.id, parent.status, {
       status: next,
       result: { counts },
-      startedAt: next === "RUNNING" && !parent.startedAt ? now : parent.startedAt,
-      finishedAt: isTerminalStatus(next) ? now : null,
+      startedAt,
+      finishedAt,
+      ...(isTerminalStatus(next) ? { exitCode: outcome.exitCode, durationMs: elapsedMs(startedAt ?? earliestDate(children.map((child) => child.startedAt)) ?? now, now) } : {}),
+      agentId: outcome.agentId,
     });
   }
 
@@ -761,6 +785,14 @@ export class JobService {
       })),
     };
   }
+}
+
+function earliestDate(values: Array<Date | null>): Date | null {
+  const dated = values.filter((value): value is Date => value instanceof Date);
+  if (dated.length === 0) {
+    return null;
+  }
+  return dated.reduce((earliest, value) => (value.getTime() < earliest.getTime() ? value : earliest));
 }
 
 function statusFromAgentError(code: string): JobStatus {

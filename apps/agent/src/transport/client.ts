@@ -24,14 +24,15 @@ export class ServerClient {
     queued: number;
     capacity: number;
     capabilities: Capability[];
-  }): Promise<void> {
-    await this.send("POST", "/api/v1/agent/heartbeat", {
+  }): Promise<unknown> {
+    const response = await this.send("POST", "/api/v1/agent/heartbeat", {
       agentId: this.config.agent.id,
       version: this.config.agent.version,
       type: this.config.agent.type,
       jobs: { running: input.running, queued: input.queued, capacity: input.capacity },
       capabilities: input.capabilities,
     });
+    return response.body;
   }
 
   async inventory(body: InventoryBody): Promise<void> {

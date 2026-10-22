@@ -15,6 +15,8 @@ import type {
   NonceRecord,
   PageQuery,
   ProxmoxNodeRecord,
+  PackageHit,
+  UpdateCount,
   UpdatePackageRecord,
   UpdateSnapshotRecord,
 } from "./records.js";
@@ -59,6 +61,7 @@ export interface Store {
   findNodeByMachine(machineId: string): Promise<ProxmoxNodeRecord | null>;
   findNodeByName(clusterId: string, name: string): Promise<ProxmoxNodeRecord | null>;
   upsertLink(link: LinkRecord): Promise<LinkRecord>;
+  deleteLink(machineId: string): Promise<void>;
   listLinks(): Promise<LinkRecord[]>;
   findLinkByMachine(machineId: string): Promise<LinkRecord | null>;
   findLinkByGuest(clusterId: string, vmid: number): Promise<LinkRecord | null>;
@@ -68,6 +71,8 @@ export interface Store {
   purgeMetricsBefore(before: Date): Promise<number>;
   insertSnapshot(snapshot: NewSnapshot): Promise<UpdateSnapshotRecord>;
   listSnapshots(machineId: string, query: PageQuery): Promise<Page<UpdateSnapshotRecord>>;
+  latestUpdateCounts(machineIds: string[]): Promise<UpdateCount[]>;
+  latestPackageHits(): Promise<PackageHit[]>;
   insertJob(job: JobRecord): Promise<void>;
   findJob(id: string): Promise<JobRecord | null>;
   listJobs(query: JobListQuery): Promise<Page<JobRecord>>;

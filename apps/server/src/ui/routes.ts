@@ -12,10 +12,15 @@ export function uiDirectory(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../ui");
 }
 
+export type UiState = {
+  password: string;
+  noCache: boolean;
+};
+
 export function registerUi(
   app: FastifyInstance,
   deps: {
-    password: string;
+    ui: UiState;
     session: SessionService;
     now: () => Date;
     directory: string;
@@ -25,12 +30,12 @@ export function registerUi(
     if (deps.session.valid(request.headers.cookie, deps.now().getTime())) {
       return reply.redirect("/ui");
     }
-    return sendHtml(reply, path.join(deps.directory, "login.html"));
+    return sendHtml(reply, path.join(deps.directory, "login.html"), deps.ui.noCache);
   });
 
   app.post("/ui/login", async (request, reply) => {
     const password = formPassword(request.body);
-    if (!tokenMatches(password, deps.password)) {
+    if (!tokenMatches(password, deps.ui.password)) {
       await delay(300);
     return reply.redirect("/ui/login?e=1", 303);
     }
@@ -62,7 +67,7 @@ export function registerUi(
     } catch {
       return reply.code(404).send({ error: { code: "NOT_FOUND", message: "fichier introuvable" } });
     }
-    return reply.type(contentType(name)).header("cache-control", "no-cache").send(createReadStream(file));
+    return reply.type(contentType(name)).header("cache-control", cacheHeader(deps.ui.noCache, false)).header("pragma", "no-cache").send(createReadStream(file));
   });
 
   app.get("/ui", async (request, reply) => sendApp(request, reply, deps));
@@ -72,19 +77,27 @@ export function registerUi(
 async function sendApp(
   request: FastifyRequest,
   reply: FastifyReply,
-  deps: { session: SessionService; now: () => Date; directory: string },
+  deps: { ui: UiState; session: SessionService; now: () => Date; directory: string },
 ): Promise<FastifyReply> {
   if (!deps.session.valid(request.headers.cookie, deps.now().getTime())) {
     return reply.redirect("/ui/login");
   }
-  return sendHtml(reply, path.join(deps.directory, "index.html"));
+  return sendHtml(reply, path.join(deps.directory, "index.html"), deps.ui.noCache);
 }
 
-async function sendHtml(reply: FastifyReply, file: string): Promise<FastifyReply> {
+function cacheHeader(noCache: boolean, document: boolean): string {
+  if (noCache) {
+    return "no-cache, no-store, must-revalidate";
+  }
+  return document ? "no-store" : "no-cache";
+}
+
+async function sendHtml(reply: FastifyReply, file: string, noCache: boolean): Promise<FastifyReply> {
   const html = await readFile(file, "utf8");
   return reply
     .type("text/html; charset=utf-8")
-    .header("cache-control", "no-store")
+    .header("cache-control", cacheHeader(noCache, true))
+    .header("pragma", "no-cache")
     .header("content-security-policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
     .header("referrer-policy", "no-referrer")
     .header("x-robots-tag", "noindex")

@@ -145,6 +145,7 @@ export const proxmoxGuestReportSchema = z
     uptime: z.number().int().min(0).optional(),
     diskUsed: z.number().int().min(0).optional(),
     diskTotal: z.number().int().min(0).optional(),
+    addresses: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
   })
   .strict();
 export type ProxmoxGuestReport = z.infer<typeof proxmoxGuestReportSchema>;
@@ -181,6 +182,7 @@ export const inventoryBodySchema = z
       })
       .strict()
       .optional(),
+    addresses: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
     guests: z.array(proxmoxGuestReportSchema).max(5_000).optional(),
   })
   .strict();
@@ -368,6 +370,7 @@ export const serverConfigSchema = z
         enabled: z.boolean().default(false),
         password: z.string().min(12).max(256).optional(),
         sessionHours: z.number().int().min(1).max(720).default(12),
+        noCache: z.boolean().default(true),
       })
       .strict()
       .superRefine((value, context) => {
@@ -379,7 +382,7 @@ export const serverConfigSchema = z
           });
         }
       })
-      .default({ enabled: false, sessionHours: 12 }),
+      .default({ enabled: false, sessionHours: 12, noCache: true }),
   })
   .strict();
 export type ServerConfig = z.infer<typeof serverConfigSchema>;

@@ -54,6 +54,30 @@ export const machineResponseSchema = z
     lastSeenAt: iso.nullable(),
     lastStateChangeAt: iso,
     hiddenAt: iso.nullable(),
+    addresses: z.array(z.string()).max(8),
+    updates: z
+      .object({
+        availableCount: z.number().int(),
+        securityCount: z.number().int().nullable(),
+        requiresReboot: z.boolean(),
+      })
+      .strict()
+      .nullable(),
+    system: z
+      .object({
+        prettyName: z.string().nullable(),
+        kernel: z.string().nullable(),
+        arch: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
+    proxmox: z
+      .object({
+        vmid: z.number().int().nullable(),
+        nodeName: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
     createdAt: iso,
     updatedAt: iso,
   })

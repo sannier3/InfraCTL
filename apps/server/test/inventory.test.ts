@@ -97,6 +97,33 @@ describe("présence et inventaire", () => {
     expect(moved?.currentNodeId).not.toBe(first?.currentNodeId);
     expect(await store.listAllMachines()).toHaveLength(3);
   });
+
+  it("rattache une VM avec agent au VMID d'un nœud et masque la fiche d'inventaire", async () => {
+    const store = new MemoryStore();
+    const inventory = service(store);
+    await store.insertAgent({ secretCiphertext: "x", agent: agent("pve01", "proxmox-node") });
+    await inventory.applyInventory("pve01", nodeInventory("pve01", "prod", [{ vmid: 104, guestType: "QEMU", name: "vm-104", status: "running" }]), NOW);
+    const cluster = await store.findCluster("prod");
+    const node = (await store.listNodes())[0];
+    const placeholder = await store.findLinkByGuest(cluster!.id, 104);
+    const vm = machine(randomUUID(), "RUNNING", NOW, "VM");
+    vm.agentId = "vm-agent";
+    vm.hostname = "vm-agent";
+    vm.displayName = "VM agent";
+    vm.metricsSource = "LOCAL_AGENT";
+    await store.insertMachine(vm);
+    await inventory.linkVm(vm.id, node!.id, 104, NOW);
+    const link = await store.findLinkByGuest(cluster!.id, 104);
+    expect(link?.machineId).toBe(vm.id);
+    expect(link?.currentNodeId).toBe(node!.id);
+    expect(link?.guestType).toBe("QEMU");
+    const hidden = await store.findMachine(placeholder!.machineId);
+    expect(hidden?.status).toBe("STOPPED");
+    expect(hidden?.hiddenAt).not.toBeNull();
+    await inventory.applyInventory("pve01", nodeInventory("pve01", "prod", [{ vmid: 104, guestType: "QEMU", name: "vm-104", status: "running" }]), NOW);
+    expect((await store.findLinkByGuest(cluster!.id, 104))?.machineId).toBe(vm.id);
+    expect((await store.findMachine(vm.id))?.agentId).toBe("vm-agent");
+  });
 });
 
 function machine(

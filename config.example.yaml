@@ -44,6 +44,8 @@ ui:
   # Mot de passe de la page /ui. Le remplacer avant tout usage réel.
   password: dev-ui-password-change
   sessionHours: 12
+  # no-cache : le navigateur recharge l'interface et l'API à chaque affichage.
+  noCache: true
 
 scheduler:
   tickMs: 1000

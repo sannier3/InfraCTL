@@ -17,7 +17,9 @@ import type {
   MetricRecord,
   NonceRecord,
   PageQuery,
+  PackageHit,
   ProxmoxNodeRecord,
+  UpdateCount,
   UpdateSnapshotRecord,
 } from "./records.js";
 import type { NewAgent, NewSnapshot, Page, Store } from "./store.js";
@@ -276,6 +278,10 @@ export class PrismaStore implements Store {
     return this.prisma.machineProxmoxLink.create({ data: link });
   }
 
+  async deleteLink(machineId: string): Promise<void> {
+    await this.prisma.machineProxmoxLink.deleteMany({ where: { machineId } });
+  }
+
   async listLinks(): Promise<LinkRecord[]> {
     return this.prisma.machineProxmoxLink.findMany();
   }
@@ -372,6 +378,68 @@ export class PrismaStore implements Store {
     return { items: rows.map(mapSnapshot), total };
   }
 
+  async latestUpdateCounts(machineIds: string[]): Promise<UpdateCount[]> {
+    if (machineIds.length === 0) {
+      return [];
+    }
+    const rows = await this.prisma.$queryRaw<Array<{
+      machineId: string;
+      availableCount: number | bigint;
+      securityCount: number | bigint | null;
+      requiresReboot: boolean | number;
+    }>>(Prisma.sql`
+      SELECT s.machineId AS machineId, s.availableCount AS availableCount, s.securityCount AS securityCount, s.requiresReboot AS requiresReboot
+      FROM UpdateSnapshot s
+      INNER JOIN (
+        SELECT machineId, MAX(createdAt) AS createdAt
+        FROM UpdateSnapshot
+        WHERE machineId IN (${Prisma.join(machineIds)})
+        GROUP BY machineId
+      ) latest ON latest.machineId = s.machineId AND latest.createdAt = s.createdAt
+    `);
+    const seen = new Set<string>();
+    return rows.flatMap((row) => {
+      if (seen.has(row.machineId)) {
+        return [];
+      }
+      seen.add(row.machineId);
+      return [{
+        machineId: row.machineId,
+        availableCount: Number(row.availableCount),
+        securityCount: row.securityCount === null ? null : Number(row.securityCount),
+        requiresReboot: Boolean(row.requiresReboot),
+      }];
+    });
+  }
+
+  async latestPackageHits(): Promise<PackageHit[]> {
+    const rows = await this.prisma.$queryRaw<Array<{
+      machineId: string;
+      name: string;
+      currentVersion: string | null;
+      newVersion: string | null;
+      changeType: string;
+      security: boolean | number;
+    }>>(Prisma.sql`
+      SELECT s.machineId AS machineId, p.name AS name, p.currentVersion AS currentVersion, p.newVersion AS newVersion, p.changeType AS changeType, p.security AS security
+      FROM UpdatePackage p
+      INNER JOIN UpdateSnapshot s ON s.id = p.snapshotId
+      INNER JOIN (
+        SELECT machineId, MAX(createdAt) AS createdAt
+        FROM UpdateSnapshot
+        GROUP BY machineId
+      ) latest ON latest.machineId = s.machineId AND latest.createdAt = s.createdAt
+    `);
+    return rows.map((row) => ({
+      machineId: row.machineId,
+      name: row.name,
+      currentVersion: row.currentVersion,
+      newVersion: row.newVersion,
+      changeType: row.changeType,
+      security: Boolean(row.security),
+    }));
+  }
+
   async insertJob(job: JobRecord): Promise<void> {
     await this.prisma.job.create({ data: jobWrite(job) });
   }
@@ -385,7 +453,7 @@ export class PrismaStore implements Store {
     const where: Prisma.JobWhereInput = {
       ...(query.status ? { status: query.status } : {}),
       ...(query.machineId ? { machineId: query.machineId } : {}),
-      ...(query.parentId ? { parentId: query.parentId } : {}),
+      ...(query.parentId ? { parentId: query.parentId } : query.rootsOnly ? { parentId: null } : {}),
       ...(query.agentId ? { agentId: query.agentId } : {}),
     };
     const [total, rows] = await this.prisma.$transaction([
@@ -798,7 +866,16 @@ function readDetails(value: Prisma.JsonValue | null): MachineDetails | null {
     kernel: read("kernel"),
     arch: read("arch"),
     proxmoxVersion: read("proxmoxVersion"),
+    addresses: readAddresses(record.addresses),
   };
+}
+
+function readAddresses(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const addresses = value.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 64);
+  return addresses.length > 0 ? addresses.slice(0, 8) : undefined;
 }
 
 function toBig(value: number | null): bigint | null {

@@ -5,7 +5,7 @@ import { buildApp } from "../src/api/app.js";
 import { MemoryStore } from "../src/database/memory-store.js";
 import type { JobRecord, MachineRecord } from "../src/database/records.js";
 import { evaluateAdmission } from "../src/jobs/admission.js";
-import { aggregateParentStatus } from "../src/jobs/parents.js";
+import { aggregateParentStatus, parentOutcome } from "../src/jobs/parents.js";
 import { registerAgent, signed, testConfig } from "./helpers.js";
 
 const NOW = new Date("2026-01-15T12:00:00.000Z");
@@ -228,6 +228,9 @@ describe("API et scheduler", () => {
     expect(aggregateParentStatus(["SUCCESS", "FAILED"])).toBe("FAILED");
     expect(aggregateParentStatus(["UNKNOWN", "SUCCESS"])).toBe("UNKNOWN");
     expect(aggregateParentStatus(["QUEUED", "QUEUED"])).toBe("QUEUED");
+    expect(parentOutcome([{ exitCode: 0, agentId: "pve-r730" }, { exitCode: null, agentId: null }])).toEqual({ exitCode: 0, agentId: "pve-r730" });
+    expect(parentOutcome([{ exitCode: 0, agentId: "pve-r730" }, { exitCode: 1, agentId: "pve-r730" }])).toEqual({ exitCode: 1, agentId: "pve-r730" });
+    expect(parentOutcome([{ exitCode: 0, agentId: "pve-r730" }, { exitCode: 0, agentId: "edge-01" }]).agentId).toBeNull();
     expect(aggregateParentStatus(["RUNNING", "QUEUED"])).toBe("RUNNING");
   });
 

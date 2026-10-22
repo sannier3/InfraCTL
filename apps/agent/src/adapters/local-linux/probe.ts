@@ -23,6 +23,7 @@ export type CpuSample = { idle: number; total: number };
 
 export interface SystemProbe {
   inspect(): Promise<SystemSnapshot>;
+  addresses(): string[];
   rebootRequired(): Promise<boolean>;
   readCpu(): Promise<CpuSample | null>;
   readNetwork(): Promise<{ rx: number; tx: number } | null>;
@@ -46,6 +47,10 @@ export class LinuxSystemProbe implements SystemProbe {
       memory: { totalBytes: os.totalmem(), freeBytes: os.freemem() },
       rebootRequired: await this.rebootRequired(),
     };
+  }
+
+  addresses(): string[] {
+    return selectAddresses(os.networkInterfaces());
   }
 
   async rebootRequired(): Promise<boolean> {
@@ -95,6 +100,28 @@ export function cpuUsageFromSamples(previous: CpuSample | null, next: CpuSample 
     return 0;
   }
   return cpuPercent(previous, next);
+}
+
+export function selectAddresses(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): string[] {
+  const found: string[] = [];
+  for (const [name, entries] of Object.entries(interfaces)) {
+    if (!entries || name === "lo") {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.internal || !usableAddress(entry.address)) {
+        continue;
+      }
+      found.push(entry.address);
+    }
+  }
+  const ipv4 = found.filter((address) => address.includes(".") && !address.includes(":"));
+  const ipv6 = found.filter((address) => address.includes(":"));
+  return [...new Set([...ipv4, ...ipv6])].slice(0, 8);
+}
+
+function usableAddress(address: string): boolean {
+  return address.length > 0 && address !== "::1" && !address.startsWith("fe80:") && !address.startsWith("169.254.");
 }
 
 async function readOptional(path: string): Promise<string | null> {

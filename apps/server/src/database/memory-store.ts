@@ -15,7 +15,9 @@ import type {
   MetricRecord,
   NonceRecord,
   PageQuery,
+  PackageHit,
   ProxmoxNodeRecord,
+  UpdateCount,
   UpdateSnapshotRecord,
 } from "./records.js";
 import type { NewAgent, NewSnapshot, Page, Store } from "./store.js";
@@ -273,6 +275,10 @@ export class MemoryStore implements Store {
     return clone(link);
   }
 
+  async deleteLink(machineId: string): Promise<void> {
+    this.links.delete(machineId);
+  }
+
   async listLinks(): Promise<LinkRecord[]> {
     return [...this.links.values()].map((link) => clone(link));
   }
@@ -337,6 +343,48 @@ export class MemoryStore implements Store {
     return pageOf(items, query);
   }
 
+  async latestUpdateCounts(machineIds: string[]): Promise<UpdateCount[]> {
+    const wanted = new Set(machineIds);
+    const latest = new Map<string, UpdateSnapshotRecord>();
+    for (const snapshot of this.snapshots) {
+      if (!wanted.has(snapshot.machineId)) continue;
+      const current = latest.get(snapshot.machineId);
+      if (!current || snapshot.createdAt.getTime() > current.createdAt.getTime()) {
+        latest.set(snapshot.machineId, snapshot);
+      }
+    }
+    return [...latest.values()].map((snapshot) => ({
+      machineId: snapshot.machineId,
+      availableCount: snapshot.availableCount,
+      securityCount: snapshot.securityCount,
+      requiresReboot: snapshot.requiresReboot,
+    }));
+  }
+
+  async latestPackageHits(): Promise<PackageHit[]> {
+    const latest = new Map<string, UpdateSnapshotRecord>();
+    for (const snapshot of this.snapshots) {
+      const current = latest.get(snapshot.machineId);
+      if (!current || snapshot.createdAt.getTime() > current.createdAt.getTime()) {
+        latest.set(snapshot.machineId, snapshot);
+      }
+    }
+    const hits: PackageHit[] = [];
+    for (const snapshot of latest.values()) {
+      for (const pkg of snapshot.packages) {
+        hits.push({
+          machineId: snapshot.machineId,
+          name: pkg.name,
+          currentVersion: pkg.currentVersion,
+          newVersion: pkg.newVersion,
+          changeType: pkg.changeType,
+          security: pkg.security,
+        });
+      }
+    }
+    return hits;
+  }
+
   async insertJob(job: JobRecord): Promise<void> {
     this.jobs.set(job.id, clone(job));
   }
@@ -351,6 +399,7 @@ export class MemoryStore implements Store {
       .filter((job) => (query.status ? job.status === query.status : true))
       .filter((job) => (query.machineId ? job.machineId === query.machineId : true))
       .filter((job) => (query.parentId ? job.parentId === query.parentId : true))
+      .filter((job) => (query.rootsOnly && !query.parentId ? job.parentId === null : true))
       .filter((job) => (query.agentId ? job.agentId === query.agentId : true))
       .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
     return pageOf(items, query);

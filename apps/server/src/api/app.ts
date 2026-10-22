@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
@@ -30,6 +31,9 @@ import { AgentAdmin } from "../agents/admin.js";
 import { createSessionService } from "../ui/session.js";
 import { registerUi, uiDirectory } from "../ui/routes.js";
 import { decodeCredentialsKey } from "../crypto/secrets.js";
+import { AgentSettingsStore, agentRuntimeSchema } from "../config/agent-settings.js";
+import { applySettingsPatch, copySettings, publicSettings, settingsPatchSchema, writeServerConfig } from "../config/settings.js";
+import { formatConfigIssues } from "@infra/schemas";
 import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
 import { InventoryService } from "../inventory/service.js";
@@ -48,7 +52,7 @@ import {
   pageSchema,
   withErrors,
 } from "./http-schemas.js";
-import { presentAgent, presentJob, presentLog, presentMachine, presentPage, iso } from "./present.js";
+import { presentAgent, presentJob, presentLog, presentMachine, presentPage, proxmoxIdentity, iso } from "./present.js";
 
 export type AppDeps = {
   config: ServerConfig;
@@ -56,6 +60,7 @@ export type AppDeps = {
   now?: () => Date;
   startScheduler?: boolean;
   credentialsKey?: Buffer;
+  configPath?: string;
 };
 
 const idParams = z.object({ id: z.string().min(1).max(128) }).strict();
@@ -111,6 +116,27 @@ const metricSchema = z
     networkRx: z.number().nullable(),
     networkTx: z.number().nullable(),
     uptime: z.number().nullable(),
+  })
+  .strict();
+
+const fleetPackageMachineSchema = z
+  .object({
+    id: z.string().uuid(),
+    currentVersion: z.string().nullable(),
+    newVersion: z.string().nullable(),
+    changeType: z.string(),
+    security: z.boolean(),
+  })
+  .strict();
+
+const fleetPackageSchema = z
+  .object({
+    name: z.string(),
+    machineCount: z.number().int(),
+    newVersions: z.array(z.string()),
+    changeTypes: z.array(z.string()),
+    security: z.boolean(),
+    machines: z.array(fleetPackageMachineSchema),
   })
   .strict();
 
@@ -216,6 +242,17 @@ export async function buildApp(deps: AppDeps): Promise<{
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  const uiState = {
+    password: deps.config.ui.password ?? "",
+    noCache: deps.config.ui.noCache,
+    sessionTtlMs: deps.config.ui.sessionHours * 3_600_000,
+  };
+  app.addHook("onSend", async (_request, reply, payload) => {
+    if (!uiState.noCache) return payload;
+    void reply.header("cache-control", "no-cache, no-store, must-revalidate");
+    void reply.header("pragma", "no-cache");
+    return payload;
+  });
   app.decorateRequest("rawBody", "");
   app.decorateRequest("agentId", "");
   app.decorateRequest("principal", undefined);
@@ -277,19 +314,23 @@ export async function buildApp(deps: AppDeps): Promise<{
 
   const session =
     deps.config.ui.enabled && deps.config.ui.password
-      ? createSessionService(key, deps.config.ui.sessionHours * 3_600_000)
+      ? createSessionService(key, uiState)
       : undefined;
-  const apiAuth = createApiAuth({
+  const authState: { admin: string; reader?: string; session?: NonNullable<typeof session>; now: () => Date } = {
     admin: deps.config.auth.apiToken,
     ...(deps.config.auth.readToken ? { reader: deps.config.auth.readToken } : {}),
-    ...(session ? { session, now } : {}),
-  });
-  const agentAuth = createAgentAuth({
+    ...(session ? { session } : {}),
+    now,
+  };
+  const apiAuth = createApiAuth(authState);
+  const agentAuthDeps = {
     store: deps.store,
     key,
     windowMs: deps.config.security.hmacWindowSeconds * 1000,
     now,
-  });
+  };
+  const agentAuth = createAgentAuth(agentAuthDeps);
+  const agentSettings = new AgentSettingsStore(deps.configPath ? join(dirname(deps.configPath), "agent-settings.json") : null);
 
   app.get("/api/v1/health", { schema: { response: { 200: healthResponseSchema } } }, async () => {
     try {
@@ -352,7 +393,59 @@ export async function buildApp(deps: AppDeps): Promise<{
     scope.delete("/agents/:id", { schema: { params: idParams, response: { 204: z.null(), 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema } } }, async (request, reply) => {
       requireAdmin(request.principal);
       await agents.remove(request.params.id);
+      agentSettings.remove(request.params.id);
       return reply.code(204).send(null);
+    });
+    scope.get("/settings", { schema: { response: { 200: z.any(), 401: errorResponseSchema, 403: errorResponseSchema } } }, async (request) => {
+      requireAdmin(request.principal);
+      return publicSettings(deps.config);
+    });
+    scope.put("/settings", { schema: { body: settingsPatchSchema, response: { 200: z.any(), 401: errorResponseSchema, 403: errorResponseSchema, 422: errorResponseSchema } } }, async (request) => {
+      requireAdmin(request.principal);
+      let next;
+      try {
+        next = applySettingsPatch(deps.config, request.body);
+      } catch (error) {
+        throw new AppError(422, ERROR_CODES.VALIDATION_ERROR, error instanceof Error ? error.message : "configuration invalide");
+      }
+      if (deps.configPath) writeServerConfig(deps.configPath, next);
+      copySettings(deps.config, next);
+      authState.admin = deps.config.auth.apiToken;
+      authState.reader = deps.config.auth.readToken;
+      agentAuthDeps.windowMs = deps.config.security.hmacWindowSeconds * 1000;
+      uiState.password = deps.config.ui.password ?? "";
+      uiState.noCache = deps.config.ui.noCache;
+      uiState.sessionTtlMs = deps.config.ui.sessionHours * 3_600_000;
+      jobs.setDispatchLeaseMs(deps.config.security.dispatchLeaseSeconds * 1000);
+      inventory.setThresholds({
+        unreachableAfterSeconds: deps.config.agents.unreachableAfterSeconds,
+        offlineAfterSeconds: deps.config.agents.offlineAfterSeconds,
+        hideStoppedAfterSeconds: deps.config.inventory.hideStoppedAfterSeconds,
+      });
+      scheduler.apply({
+        tickMs: deps.config.scheduler.tickMs,
+        noncePurgeEveryTicks: deps.config.scheduler.noncePurgeEveryTicks,
+        metricPurgeEveryTicks: deps.config.scheduler.metricPurgeEveryTicks,
+        retentionDays: deps.config.metrics.retentionDays,
+      });
+      const restartRequired = Boolean(
+        request.body.server || request.body.secrets?.databaseUrl || request.body.ui?.enabled !== undefined,
+      );
+      return { settings: publicSettings(deps.config), restartRequired };
+    });
+    scope.get("/agents/:id/runtime", { schema: { params: idParams, response: { 200: z.any(), 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema } } }, async (request) => {
+      requireAdmin(request.principal);
+      const agent = await deps.store.findAgent(request.params.id);
+      if (!agent) throw new AppError(404, ERROR_CODES.NOT_FOUND, "agent introuvable");
+      return { settings: agentSettings.get(agent.id) };
+    });
+    scope.put("/agents/:id/runtime", { schema: { params: idParams, body: agentRuntimeSchema, response: { 200: z.any(), 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 422: errorResponseSchema } } }, async (request) => {
+      requireAdmin(request.principal);
+      const agent = await deps.store.findAgent(request.params.id);
+      if (!agent) throw new AppError(404, ERROR_CODES.NOT_FOUND, "agent introuvable");
+      const parsed = agentRuntimeSchema.safeParse(request.body);
+      if (!parsed.success) throw new AppError(422, ERROR_CODES.VALIDATION_ERROR, formatConfigIssues(parsed.error));
+      return { settings: agentSettings.save(agent.id, parsed.data) };
     });
     scope.get("/clusters", { schema: { querystring: paginationQuerySchema, response: withErrors(pageSchema(clusterSchema)) } }, async (request) => {
       const all = await deps.store.listClusters();
@@ -396,6 +489,13 @@ export async function buildApp(deps: AppDeps): Promise<{
       }
       return { ...node, createdAt: node.createdAt.toISOString(), updatedAt: node.updatedAt.toISOString() };
     });
+    const proxmoxCatalog = async () => {
+      const [links, nodes] = await Promise.all([deps.store.listLinks(), deps.store.listNodes()]);
+      return { links, nodes };
+    };
+    scope.get("/updates", { schema: { response: withErrors(z.object({ data: z.array(fleetPackageSchema) }).strict()) } }, async () => {
+      return { data: aggregatePackages(await deps.store.latestPackageHits()) };
+    });
     scope.get("/machines", { schema: { querystring: machineQuery, response: withErrors(pageSchema(machineResponseSchema)) } }, async (request) => {
       const page = await deps.store.listMachines({
         page: request.query.page,
@@ -405,14 +505,39 @@ export async function buildApp(deps: AppDeps): Promise<{
         ...(request.query.status ? { status: request.query.status } : {}),
         ...(request.query.clusterId ? { clusterId: request.query.clusterId } : {}),
       });
-      return presentPage(page.items, page.total, request.query.page, request.query.limit, presentMachine);
+      const [index, updates] = await Promise.all([
+        proxmoxCatalog(),
+        deps.store.latestUpdateCounts(page.items.map((machine) => machine.id)),
+      ]);
+      const byMachine = new Map(updates.map((item) => [item.machineId, item]));
+      return presentPage(page.items, page.total, request.query.page, request.query.limit, (machine) =>
+        presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), byMachine.get(machine.id) ?? null),
+      );
     });
     scope.get("/machines/:id", { schema: { params: idParams, response: withErrors(machineResponseSchema) } }, async (request) => {
       const machine = await deps.store.findMachine(request.params.id);
       if (!machine) {
         throw new AppError(404, ERROR_CODES.NOT_FOUND, "machine introuvable");
       }
-      return presentMachine(machine);
+      const [index, updates] = await Promise.all([
+        proxmoxCatalog(),
+        deps.store.latestUpdateCounts([machine.id]),
+      ]);
+      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), updates[0] ?? null);
+    });
+    scope.post("/machines/:id/proxmox-link", {
+      schema: {
+        params: idParams,
+        body: z.object({ nodeId: z.string().trim().min(1).max(128), vmid: z.number().int().min(1).max(999_999_999) }).strict(),
+        response: withErrors(machineResponseSchema),
+      },
+    }, async (request) => {
+      const machine = await inventory.linkVm(request.params.id, request.body.nodeId, request.body.vmid, now());
+      const [index, updates] = await Promise.all([
+        proxmoxCatalog(),
+        deps.store.latestUpdateCounts([machine.id]),
+      ]);
+      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), updates[0] ?? null);
     });
     scope.get(
       "/machines/:id/resources",
@@ -480,7 +605,7 @@ export async function buildApp(deps: AppDeps): Promise<{
         limit: request.query.limit,
         ...(request.query.status ? { status: request.query.status } : {}),
         ...(request.query.machineId ? { machineId: request.query.machineId } : {}),
-        ...(request.query.parentId ? { parentId: request.query.parentId } : {}),
+        ...(request.query.parentId ? { parentId: request.query.parentId } : { rootsOnly: true }),
       });
       return presentPage(page.items, page.total, request.query.page, request.query.limit, presentJob);
     });
@@ -534,9 +659,11 @@ export async function buildApp(deps: AppDeps): Promise<{
   app.register(async (raw) => {
     const scope = raw.withTypeProvider<ZodTypeProvider>();
     scope.addHook("preHandler", agentAuth);
-    scope.post("/heartbeat", { schema: { body: heartbeatBodySchema, response: withErrors(z.object({ status: z.literal("ok") }).strict()) } }, async (request) => {
-      await inventory.heartbeat(requireAgentId(request), request.body, now());
-      return { status: "ok" as const };
+    scope.post("/heartbeat", { schema: { body: heartbeatBodySchema, response: withErrors(z.object({ status: z.literal("ok"), settings: agentRuntimeSchema.optional() }).strict()) } }, async (request) => {
+      const agentId = requireAgentId(request);
+      await inventory.heartbeat(agentId, request.body, now());
+      const settings = agentSettings.get(agentId);
+      return settings ? { status: "ok" as const, settings } : { status: "ok" as const };
     });
     scope.post("/inventory", { schema: { body: inventoryBodySchema, response: withErrors(machineResponseSchema) } }, async (request) => {
       return presentMachine(await inventory.applyInventory(requireAgentId(request), request.body, now()));
@@ -590,7 +717,7 @@ export async function buildApp(deps: AppDeps): Promise<{
 
   if (session && deps.config.ui.password) {
     registerUi(app, {
-      password: deps.config.ui.password,
+      ui: uiState,
       session,
       now,
       directory: uiDirectory(),
@@ -602,6 +729,36 @@ export async function buildApp(deps: AppDeps): Promise<{
   });
 
   return { app, jobs, inventory, scheduler, hub };
+}
+
+function aggregatePackages(hits: Array<{ machineId: string; name: string; currentVersion: string | null; newVersion: string | null; changeType: string; security: boolean }>) {
+  const groups = new Map<string, { machines: Map<string, { id: string; currentVersion: string | null; newVersion: string | null; changeType: string; security: boolean }>; versions: Set<string>; changes: Set<string>; security: boolean }>();
+  for (const hit of hits) {
+    const group = groups.get(hit.name) ?? { machines: new Map(), versions: new Set<string>(), changes: new Set<string>(), security: false };
+    if (!group.machines.has(hit.machineId)) {
+      group.machines.set(hit.machineId, {
+        id: hit.machineId,
+        currentVersion: hit.currentVersion,
+        newVersion: hit.newVersion,
+        changeType: hit.changeType,
+        security: hit.security,
+      });
+    }
+    if (hit.newVersion) group.versions.add(hit.newVersion);
+    if (hit.changeType) group.changes.add(hit.changeType);
+    if (hit.security) group.security = true;
+    groups.set(hit.name, group);
+  }
+  return [...groups.entries()]
+    .map(([name, group]) => ({
+      name,
+      machineCount: group.machines.size,
+      newVersions: [...group.versions].sort((left, right) => left.localeCompare(right, "fr")),
+      changeTypes: [...group.changes].sort((left, right) => left.localeCompare(right, "fr")),
+      security: group.security,
+      machines: [...group.machines.values()],
+    }))
+    .sort((left, right) => right.machineCount - left.machineCount || left.name.localeCompare(right.name, "fr"));
 }
 
 function principalOf(principal: Principal | null | undefined): Principal {

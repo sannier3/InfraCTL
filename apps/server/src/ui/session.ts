@@ -10,7 +10,7 @@ export type SessionService = {
   clearCookie(secure: boolean): string;
 };
 
-export function createSessionService(key: Buffer, ttlMs: number): SessionService {
+export function createSessionService(key: Buffer, timing: { sessionTtlMs: number }): SessionService {
   const signingKey = createHmac("sha256", key).update(LABEL).digest();
   return {
     valid(cookieHeader, now) {
@@ -38,12 +38,12 @@ export function createSessionService(key: Buffer, ttlMs: number): SessionService
       }
     },
     issue(now) {
-      const payload = Buffer.from(JSON.stringify({ exp: now + ttlMs }), "utf8").toString("base64url");
+      const payload = Buffer.from(JSON.stringify({ exp: now + timing.sessionTtlMs }), "utf8").toString("base64url");
       const mac = createHmac("sha256", signingKey).update(payload).digest("base64url");
       return `${payload}.${mac}`;
     },
     setCookie(token, secure) {
-      return cookieHeader(COOKIE, token, secure, Math.floor(ttlMs / 1000));
+      return cookieHeader(COOKIE, token, secure, Math.floor(timing.sessionTtlMs / 1000));
     },
     clearCookie(secure) {
       return cookieHeader(COOKIE, "", secure, 0);

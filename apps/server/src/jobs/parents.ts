@@ -41,6 +41,25 @@ export function aggregateParentStatus(children: readonly JobStatus[]): JobStatus
   return "FAILED";
 }
 
+export function parentOutcome(children: readonly { exitCode: number | null; agentId: string | null }[]): {
+  exitCode: number | null;
+  agentId: string | null;
+} {
+  const codes = children.flatMap((child) => (child.exitCode === null ? [] : [child.exitCode]));
+  const agents = [...new Set(children.flatMap((child) => (child.agentId ? [child.agentId] : [])))];
+  return {
+    exitCode: codes.find((code) => code !== 0) ?? (codes.length > 0 ? 0 : null),
+    agentId: agents.length === 1 ? agents[0] ?? null : null,
+  };
+}
+
+export function elapsedMs(startedAt: Date | null, finishedAt: Date | null): number | null {
+  if (!startedAt || !finishedAt) {
+    return null;
+  }
+  return Math.min(Math.max(0, finishedAt.getTime() - startedAt.getTime()), 2_147_483_647);
+}
+
 export function parentCounts(children: readonly JobStatus[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const status of children) {

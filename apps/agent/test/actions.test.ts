@@ -7,7 +7,8 @@ import { parseAptSimulation } from "../src/actions/apt/parse.js";
 import { APT_CHECK_ARGS, APT_CHECK_EXECUTABLE, APT_UPGRADE_ARGS, APT_UPGRADE_EXECUTABLE } from "../src/adapters/local-linux/apt.js";
 import { cpuPercent, parseOsRelease, parseProcNetDev, parseProcStat } from "../src/adapters/local-linux/system.js";
 import type { SystemProbe } from "../src/adapters/local-linux/probe.js";
-import { interpretPctStatus, parseGuestList, parsePveVersion, pctStatusArgs } from "../src/proxmox/parse.js";
+import { interpretPctStatus, parseGuestList, parseInterfaceAddresses, parsePveVersion, pctStatusArgs } from "../src/proxmox/parse.js";
+import { selectAddresses } from "../src/adapters/local-linux/probe.js";
 
 const config = agentConfigSchema.parse({
   server: { protocol: "http", host: "10.0.0.10", port: 8080 },
@@ -238,6 +239,8 @@ describe("collecteurs locaux et Proxmox", () => {
       { vmid: 101, name: "ct-web", status: "running", lock: null },
       { vmid: 102, name: "ct-db", status: "stopped", lock: "backup" },
     ]);
+    expect(selectAddresses({ lo: [{ address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }], eth0: [{ address: "192.168.100.30", netmask: "255.255.255.0", family: "IPv4", mac: "00:00:00:00:00:01", internal: false, cidr: "192.168.100.30/24" }, { address: "fe80::1", netmask: "ffff:ffff:ffff:ffff::", family: "IPv6", mac: "00:00:00:00:00:01", internal: false, cidr: "fe80::1/64", scopeid: 0 }] })).toEqual(["192.168.100.30"]);
+    expect(parseInterfaceAddresses(`[{"name":"eth0","inet":"10.0.0.8/24","ip-addresses":[{"ip-address":"10.0.0.8","ip-address-type":"inet"}]}]`)).toEqual(["10.0.0.8"]);
     expect(parseGuestList(`[{"vmid":200,"status":"stopped","mem":0,"maxmem":2048,"cpu":1,"maxcpu":2}]`)).toEqual([
       { vmid: 200, name: "200", status: "stopped", lock: null, cpu: 50, memoryUsed: 0, memoryTotal: 2048 },
     ]);
@@ -298,6 +301,9 @@ function job(): AgentJob {
 
 function probe(): SystemProbe {
   return {
+    addresses() {
+      return [];
+    },
     async inspect() {
       return {
         hostname: "vm-web-01",

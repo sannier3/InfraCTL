@@ -23,6 +23,15 @@ export class Scheduler {
     },
   ) {}
 
+  apply(patch: { tickMs?: number; noncePurgeEveryTicks?: number; metricPurgeEveryTicks?: number; retentionDays?: number }): void {
+    const restart = patch.tickMs !== undefined && patch.tickMs !== this.options.tickMs;
+    Object.assign(this.options, patch);
+    if (restart && this.timer) {
+      this.stop();
+      this.start();
+    }
+  }
+
   start(): void {
     if (this.timer) {
       return;

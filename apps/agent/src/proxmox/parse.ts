@@ -117,6 +117,55 @@ function parseJsonList(stdout: string): ListedGuest[] {
   return guests;
 }
 
+export function parseInterfaceAddresses(stdout: string): string[] {
+  const trimmed = stdout.trim();
+  const start = trimmed.indexOf("[") >= 0 ? trimmed.indexOf("[") : trimmed.indexOf("{");
+  if (start < 0) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed.slice(start));
+  } catch {
+    return [];
+  }
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { result?: unknown }).result)
+      ? (parsed as { result: unknown[] }).result
+      : [];
+  const found: string[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const record = row as Record<string, unknown>;
+    collectAddress(found, record.inet);
+    collectAddress(found, record.inet6);
+    if (Array.isArray(record["ip-addresses"])) {
+      for (const item of record["ip-addresses"]) {
+        if (item && typeof item === "object") {
+          collectAddress(found, (item as { "ip-address"?: unknown })["ip-address"]);
+        }
+      }
+    }
+  }
+  return found.slice(0, 8);
+}
+
+function collectAddress(found: string[], value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const address = value.split("/")[0]?.trim() ?? "";
+  if (!address || address === "::1" || address.startsWith("127.") || address.startsWith("fe80:") || address.startsWith("169.254.")) {
+    return;
+  }
+  if (!found.includes(address)) {
+    found.push(address);
+  }
+}
+
 function cpuPercent(cpu: unknown, cores: unknown): number | undefined {
   if (typeof cpu !== "number" || !Number.isFinite(cpu) || cpu < 0) {
     return undefined;

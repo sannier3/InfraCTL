@@ -36,6 +36,16 @@ export class InventoryService {
     return this.lock.run(() => this.refreshUnlocked(now));
   }
 
+  setThresholds(next: InventoryThresholds): void {
+    this.thresholds.unreachableAfterSeconds = next.unreachableAfterSeconds;
+    this.thresholds.offlineAfterSeconds = next.offlineAfterSeconds;
+    this.thresholds.hideStoppedAfterSeconds = next.hideStoppedAfterSeconds;
+  }
+
+  linkVm(machineId: string, nodeId: string, vmid: number, now: Date): Promise<MachineRecord> {
+    return this.lock.run(() => this.linkVmUnlocked(machineId, nodeId, vmid, now));
+  }
+
   async refreshUnlocked(now: Date): Promise<void> {
     const agents = await this.store.listAgents();
     for (const agent of agents) {
@@ -93,6 +103,46 @@ export class InventoryService {
     return updated;
   }
 
+  private async linkVmUnlocked(machineId: string, nodeId: string, vmid: number, now: Date): Promise<MachineRecord> {
+    const machine = await this.store.findMachine(machineId);
+    if (!machine) {
+      throw new AppError(404, ERROR_CODES.NOT_FOUND, "machine introuvable");
+    }
+    if (machine.type !== "VM") {
+      throw new AppError(422, ERROR_CODES.INCOMPATIBLE_TARGET, "seule une VM se lie à un VMID Proxmox");
+    }
+    const node = await this.store.findNode(nodeId);
+    if (!node) {
+      throw new AppError(404, ERROR_CODES.NOT_FOUND, "nœud Proxmox introuvable");
+    }
+    const guest = await this.store.findLinkByGuest(node.clusterId, vmid);
+    if (guest?.guestType === "LXC") {
+      throw new AppError(422, ERROR_CODES.INCOMPATIBLE_TARGET, "ce VMID est un conteneur LXC");
+    }
+    if (guest && guest.machineId !== machine.id) {
+      const other = await this.store.findMachine(guest.machineId);
+      if (other?.agentId) {
+        throw new AppError(409, ERROR_CODES.CONFLICT, "ce VMID est déjà lié à une machine qui a un agent");
+      }
+      await this.store.deleteLink(guest.machineId);
+      if (other) {
+        await this.store.updateMachine(other.id, { status: "STOPPED", hiddenAt: now, lastStateChangeAt: now });
+      }
+    }
+    const own = await this.store.findLinkByMachine(machine.id);
+    if (own && (own.clusterId !== node.clusterId || own.vmid !== vmid)) {
+      await this.store.deleteLink(machine.id);
+    }
+    await this.store.upsertLink({
+      machineId: machine.id,
+      clusterId: node.clusterId,
+      currentNodeId: node.id,
+      vmid,
+      guestType: "QEMU",
+    });
+    return (await this.store.findMachine(machine.id)) ?? machine;
+  }
+
   private async applyInventoryUnlocked(agentId: string, body: InventoryBody, now: Date): Promise<MachineRecord> {
     const agent = await this.store.findAgent(agentId);
     if (!agent) {
@@ -130,7 +180,7 @@ export class InventoryService {
       status: body.status,
       metricsSource: body.metricsSource,
       now,
-      details: detailsFrom(body),
+      details: detailsFrom(body, existing?.details ?? null),
     });
     if (body.proxmox && clusterId) {
       const current = await this.store.findLinkByGuest(clusterId, body.proxmox.vmid);
@@ -168,7 +218,7 @@ export class InventoryService {
       status: "RUNNING",
       metricsSource: body.metricsSource,
       now,
-      details: { ...detailsFrom(body), proxmoxVersion: body.node.version },
+      details: detailsFrom(body, existing?.details ?? null),
     });
     const node = await this.store.upsertNode({
       id: randomUUID(),
@@ -219,7 +269,7 @@ export class InventoryService {
       status,
       metricsSource: existing?.agentId ? existing.metricsSource : "PROXMOX",
       now,
-      details: existing?.details ?? null,
+      details: guestDetails(existing, type, guest.addresses),
     });
     await this.store.upsertLink({
       machineId: machine.id,
@@ -470,7 +520,8 @@ export class InventoryService {
   }
 }
 
-function detailsFrom(body: InventoryBody): MachineRecord["details"] {
+function detailsFrom(body: InventoryBody, previous: MachineRecord["details"]): MachineRecord["details"] {
+  const addresses = body.addresses ?? previous?.addresses;
   return {
     osId: body.os.id,
     osName: body.os.name,
@@ -478,5 +529,19 @@ function detailsFrom(body: InventoryBody): MachineRecord["details"] {
     prettyName: body.os.prettyName,
     kernel: body.os.kernel,
     arch: body.os.arch,
+    ...(body.node?.version ? { proxmoxVersion: body.node.version } : previous?.proxmoxVersion ? { proxmoxVersion: previous.proxmoxVersion } : {}),
+    ...(addresses && addresses.length > 0 ? { addresses } : {}),
   };
+}
+
+function guestDetails(
+  existing: MachineRecord | null,
+  type: MachineType,
+  addresses: string[] | undefined,
+): MachineRecord["details"] {
+  const details = existing?.details ?? null;
+  if (!addresses || addresses.length === 0 || (type === "VM" && existing?.agentId)) {
+    return details;
+  }
+  return { ...(details ?? {}), addresses };
 }

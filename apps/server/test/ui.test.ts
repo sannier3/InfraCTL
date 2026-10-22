@@ -15,12 +15,13 @@ describe("interface interne", () => {
 
   it("ouvre une session avec le mot de passe et refuse le jeton dans la page", async () => {
     const config = testConfig();
-    config.ui = { enabled: true, password: PASSWORD, sessionHours: 12 };
+    config.ui = { enabled: true, password: PASSWORD, sessionHours: 12, noCache: true };
     const built = await buildApp({ config, store: new MemoryStore(), startScheduler: false });
     const base = await listen(built.app);
 
     const page = await fetch(`${base}/ui/login`);
     expect(page.status).toBe(200);
+    expect(page.headers.get("cache-control")).toContain("no-cache");
     const html = await page.text();
     expect(html).toContain("Mot de passe");
     expect(html).not.toContain(PASSWORD);

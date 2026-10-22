@@ -38,6 +38,7 @@ export type MachineDetails = {
   kernel?: string;
   arch?: string;
   proxmoxVersion?: string;
+  addresses?: string[];
 };
 
 export type MachineRecord = {
@@ -106,6 +107,22 @@ export type UpdatePackageRecord = {
   architecture: string | null;
   changeType: string;
   security: boolean;
+};
+
+export type PackageHit = {
+  machineId: string;
+  name: string;
+  currentVersion: string | null;
+  newVersion: string | null;
+  changeType: string;
+  security: boolean;
+};
+
+export type UpdateCount = {
+  machineId: string;
+  availableCount: number;
+  securityCount: number | null;
+  requiresReboot: boolean;
 };
 
 export type UpdateSnapshotRecord = {
@@ -195,6 +212,7 @@ export type JobListQuery = PageQuery & {
   machineId?: string;
   parentId?: string;
   agentId?: string;
+  rootsOnly?: boolean;
 };
 
 export type AgentUpdate = Partial<

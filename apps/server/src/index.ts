@@ -17,7 +17,7 @@ try {
 process.env.DATABASE_URL = config.database.url;
 const prisma = new PrismaClient();
 const store = new PrismaStore(prisma);
-const built = await buildApp({ config, store, startScheduler: true });
+const built = await buildApp({ config, store, startScheduler: true, configPath });
 
 const shutdown = async (): Promise<void> => {
   built.scheduler.stop();

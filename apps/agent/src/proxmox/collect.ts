@@ -2,7 +2,7 @@ import type { AgentConfig, InventoryBody } from "@infra/schemas";
 import { SAFE_PROCESS_ENV } from "../adapters/local-linux/apt.js";
 import type { SystemProbe } from "../adapters/local-linux/probe.js";
 import type { ProcessRunner } from "../process/types.js";
-import { lxcIndexArgs, parseGuestList, parsePveVersion, qemuIndexArgs } from "./parse.js";
+import { lxcIndexArgs, parseGuestList, parseInterfaceAddresses, parsePveVersion, qemuIndexArgs } from "./parse.js";
 
 export type ProxmoxInventoryCollection = {
   body: InventoryBody;
@@ -58,6 +58,7 @@ export async function collectProxmoxInventory(
       kernel: info.kernel,
       arch: info.arch,
     },
+    addresses: probe.addresses(),
     node: {
       clusterId,
       name: info.hostname,
@@ -80,7 +81,60 @@ export async function collectProxmoxInventory(
       .filter((line) => line.length > 0)
       .join(" ; ");
   }
+  if (body.guests) {
+    body.guests = await attachAddresses(runner, body.guests);
+  }
   return { body, listError };
+}
+
+async function attachAddresses(
+  runner: ProcessRunner,
+  guests: NonNullable<InventoryBody["guests"]>,
+): Promise<NonNullable<InventoryBody["guests"]>> {
+  const running = guests.filter((guest) => guest.status === "running");
+  const found = new Map<string, string[]>();
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < running.length) {
+      const guest = running[cursor];
+      cursor += 1;
+      if (!guest) {
+        continue;
+      }
+      const addresses = await readGuestAddresses(runner, guest.guestType, guest.vmid);
+      if (addresses && addresses.length > 0) {
+        found.set(`${guest.guestType}:${guest.vmid}`, addresses);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, running.length) }, () => worker()));
+  return guests.map((guest) => {
+    const addresses = found.get(`${guest.guestType}:${guest.vmid}`);
+    return addresses ? { ...guest, addresses } : guest;
+  });
+}
+
+async function readGuestAddresses(runner: ProcessRunner, guestType: "LXC" | "QEMU", vmid: number): Promise<string[] | undefined> {
+  if (!Number.isInteger(vmid) || vmid < 1 || vmid > 999_999_999) {
+    return undefined;
+  }
+  const path =
+    guestType === "LXC"
+      ? `/nodes/localhost/lxc/${vmid}/interfaces`
+      : `/nodes/localhost/qemu/${vmid}/agent/network-get-interfaces`;
+  const run = await runner.run({
+    executable: "pvesh",
+    args: ["get", path, "--output-format", "json"],
+    timeoutMs: 8_000,
+    env: SAFE_PROCESS_ENV,
+    allowSigkill: true,
+    sigkillAfterMs: 2_000,
+  });
+  if (run.exitCode !== 0) {
+    return undefined;
+  }
+  const addresses = parseInterfaceAddresses(run.stdout);
+  return addresses.length > 0 ? addresses : undefined;
 }
 
 function readGuestIndex(stdout: string): ReturnType<typeof parseGuestList> | null {

@@ -1,5 +1,5 @@
 import { paginationMeta } from "@infra/utils";
-import type { AgentRecord, JobLogRecord, JobRecord, MachineRecord } from "../database/records.js";
+import type { AgentRecord, JobLogRecord, JobRecord, LinkRecord, MachineRecord, ProxmoxNodeRecord, UpdateCount } from "../database/records.js";
 
 export function iso(date: Date | null): string | null {
   return date ? date.toISOString() : null;
@@ -24,7 +24,23 @@ export function presentAgent(agent: AgentRecord) {
   };
 }
 
-export function presentMachine(machine: MachineRecord) {
+export function proxmoxIdentity(machineId: string, links: LinkRecord[], nodes: ProxmoxNodeRecord[]) {
+  const link = links.find((item) => item.machineId === machineId) ?? null;
+  const node = link
+    ? (nodes.find((item) => item.id === link.currentNodeId) ?? null)
+    : (nodes.find((item) => item.machineId === machineId) ?? null);
+  if (!link && !node) {
+    return null;
+  }
+  return { vmid: link?.vmid ?? null, nodeName: node?.name ?? null };
+}
+
+export function presentMachine(
+  machine: MachineRecord,
+  proxmox: { vmid: number | null; nodeName: string | null } | null = null,
+  updates: UpdateCount | null = null,
+) {
+  const details = machine.details;
   return {
     id: machine.id,
     hostname: machine.hostname,
@@ -36,6 +52,22 @@ export function presentMachine(machine: MachineRecord) {
     lastSeenAt: iso(machine.lastSeenAt),
     lastStateChangeAt: machine.lastStateChangeAt.toISOString(),
     hiddenAt: iso(machine.hiddenAt),
+    addresses: details?.addresses ?? [],
+    updates: updates
+      ? {
+          availableCount: updates.availableCount,
+          securityCount: updates.securityCount,
+          requiresReboot: updates.requiresReboot,
+        }
+      : null,
+    system: details
+      ? {
+          prettyName: details.prettyName ?? null,
+          kernel: details.kernel ?? null,
+          arch: details.arch ?? null,
+        }
+      : null,
+    proxmox,
     createdAt: machine.createdAt.toISOString(),
     updatedAt: machine.updatedAt.toISOString(),
   };

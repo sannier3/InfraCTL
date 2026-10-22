@@ -6,6 +6,7 @@ import { cpuUsageFromSamples, type CpuSample, type SystemProbe } from "./adapter
 import type { ProcessRunner } from "./process/types.js";
 import type { ServerClient } from "./transport/client.js";
 import { collectProxmoxInventory } from "./proxmox/collect.js";
+import { applyRemoteSettings } from "./settings.js";
 import { LogShipper } from "./transport/log-shipper.js";
 import type { Logger } from "@infra/utils";
 
@@ -21,11 +22,11 @@ export async function runAgent(input: {
   await untilOnline(input, state);
   await sendInventory(input);
   const loops = [
-    loop(input.config.intervals.heartbeatSeconds * 1000, input.signal, () =>
-      input.client.heartbeat(heartbeatPayload(input.config, state)),
-    ),
-    loop(input.config.intervals.inventorySeconds * 1000, input.signal, () => sendInventory(input)),
-    loop(input.config.intervals.resourcesSeconds * 1000, input.signal, async () => {
+    loop(() => input.config.intervals.heartbeatSeconds * 1000, input.signal, async () => {
+      applyRemoteSettings(input.config, await input.client.heartbeat(heartbeatPayload(input.config, state)));
+    }),
+    loop(() => input.config.intervals.inventorySeconds * 1000, input.signal, () => sendInventory(input)),
+    loop(() => input.config.intervals.resourcesSeconds * 1000, input.signal, async () => {
       if (input.config.metrics.source !== "LOCAL_AGENT") {
         return;
       }
@@ -44,7 +45,7 @@ async function untilOnline(
   let attempt = 0;
   while (!input.signal.aborted) {
     try {
-      await input.client.heartbeat(heartbeatPayload(input.config, state));
+      applyRemoteSettings(input.config, await input.client.heartbeat(heartbeatPayload(input.config, state)));
       return;
     } catch {
       input.logger.warn({ attempt }, "serveur injoignable");
@@ -79,9 +80,10 @@ async function sendInventory(input: {
       ...(info.os.name ? { name: info.os.name } : {}),
       ...(info.os.version ? { version: info.os.version } : {}),
       ...(info.os.prettyName ? { prettyName: info.os.prettyName } : {}),
-      kernel: info.kernel,
-      arch: info.arch,
-    },
+    kernel: info.kernel,
+    arch: info.arch,
+  },
+  addresses: input.probe.addresses(),
     ...(input.config.proxmox.clusterId && input.config.proxmox.vmid
       ? { proxmox: { clusterId: input.config.proxmox.clusterId, vmid: input.config.proxmox.vmid } }
       : {}),
@@ -247,13 +249,13 @@ function heartbeatPayload(config: AgentConfig, state: { running: number }) {
   };
 }
 
-async function loop(intervalMs: number, signal: AbortSignal, task: () => Promise<void>): Promise<void> {
+async function loop(intervalMs: number | (() => number), signal: AbortSignal, task: () => Promise<void>): Promise<void> {
   let attempt = 0;
   while (!signal.aborted) {
     try {
       await task();
       attempt = 0;
-      await sleep(intervalMs, signal);
+      await sleep(typeof intervalMs === "function" ? intervalMs() : intervalMs, signal);
     } catch {
       await sleep(backoffDelayMs(attempt), signal);
       attempt += 1;
