@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Infra Manager</title>
+    <link rel="stylesheet" href="/ui/assets/app.css" />
+  </head>
+  <body class="gate-body">
+    <main class="gate">
+      <p class="eyebrow">Infra Manager</p>
+      <h1>Ouvrir la salle de contrôle</h1>
+      <p class="lede">L'accès est réservé au mot de passe défini dans la configuration du serveur.</p>
+      <form method="post" action="/ui/login" autocomplete="current-password">
+        <label for="password">Mot de passe</label>
+        <input id="password" name="password" type="password" required minlength="12" autofocus />
+        <p class="form-error" data-error hidden>Mot de passe refusé.</p>
+        <button type="submit">Entrer</button>
+      </form>
+    </main>
+    <script type="module" src="/ui/assets/login.js"></script>
+  </body>
+</html>

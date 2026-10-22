@@ -77,6 +77,18 @@ export class PrismaStore implements Store {
     return result.count === 1;
   }
 
+  async deleteAgent(id: string): Promise<boolean> {
+    try {
+      await this.prisma.agent.delete({ where: { id } });
+      return true;
+    } catch (error) {
+      if (isMissing(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   async findAgent(id: string): Promise<AgentRecord | null> {
     const row = await this.prisma.agent.findUnique({ where: { id } });
     return row ? mapAgent(row) : null;

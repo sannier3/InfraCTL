@@ -41,9 +41,24 @@ Comparer les jetons se fait sur leur empreinte SHA-256. Le serveur ne journalise
 
 Remplacer les deux valeurs avant un usage autre que le développement local.
 
+## Interface /ui
+
+Le mot de passe est distinct du jeton Bearer. Il se place dans la configuration du serveur :
+
+```yaml
+ui:
+  enabled: true
+  password: un-mot-de-passe-long
+  sessionHours: 12
+```
+
+`GET /ui/login` affiche le formulaire. Un mot de passe accepté pose un cookie de session `HttpOnly`, `SameSite=Lax`, signé avec une clé dérivée de `security.credentialsKey`. Ce cookie donne les droits d'administrateur sur `/api/v1` pour la durée `sessionHours`. Les requêtes qui modifient quelque chose doivent en plus porter `X-Infra-Request: 1`. L'interface l'ajoute elle-même. Une page PHP continue d'utiliser `Authorization: Bearer` et n'a pas besoin de cet en-tête.
+
+Le mot de passe n'est pas écrit dans le HTML, ni dans l'URL, ni dans les logs. Si `ui.enabled` vaut `false`, `/ui` répond `404`.
+
 ## Agents
 
-L'agent ne présente pas le jeton Bearer. Chaque requête vers `/api/v1/agent/...` est signée en HMAC-SHA256 avec son secret. Les en-têtes sont `X-Agent-ID`, `X-Timestamp`, `X-Nonce` et `X-Signature`. Le secret est enregistré chiffré en base au moment de `pnpm agent:register` et n'est jamais renvoyé par l'API.
+L'agent ne présente pas le jeton Bearer. Chaque requête vers `/api/v1/agent/...` est signée en HMAC-SHA256 avec son secret. Les en-têtes sont `X-Agent-ID`, `X-Timestamp`, `X-Nonce` et `X-Signature`. Le secret est enregistré chiffré en base, soit par `pnpm agent:register`, soit par `POST /api/v1/agents`. Il n'est jamais renvoyé par l'API.
 
 Une page PHP n'a pas à produire cette signature. Les routes `/api/v1/agent/*` sont réservées aux agents. Un appel Bearer sur ces routes est refusé, et un appel HMAC sur `/api/v1/machines` l'est aussi.
 

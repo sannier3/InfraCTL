@@ -1,12 +1,13 @@
 # Documentation
 
-Le serveur Infra Manager n'a pas d'interface d'administration. Une page PHP, ou n'importe quel autre programme, parle à l'API REST `/api/v1`.
+Le serveur Infra Manager expose une API REST `/api/v1` et une interface interne sur `/ui`.
 
 | Document | Contenu |
 | --- | --- |
 | [Contexte](context.md) | Résumé stable du projet, invariants et périmètre de cette version |
 | [Logique du serveur](logique-serveur.md) | Rôles du serveur et de l'agent, inventaire, jobs, ce qui est actif |
-| [Authentification](authentification.md) | Jeton Bearer de l'API, jeton lecteur, secret HMAC des agents |
+| [Authentification](authentification.md) | Jeton Bearer de l'API, mot de passe de l'interface, secret HMAC des agents |
+| [Interface](interface.md) | Page `/ui`, session, écrans |
 | [API](api.md) | Routes, corps des requêtes, formes des réponses, ce qu'il faut afficher |
 | [Appels PHP](php.md) | Client PHP, listes, détail, lancement d'une action, attente du résultat |
 

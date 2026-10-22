@@ -7,6 +7,10 @@ import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
 import type { Principal } from "../jobs/service.js";
 
+export type SessionReader = {
+  valid(cookieHeader: string | undefined, now: number): boolean;
+};
+
 export function createAgentAuth(deps: {
   store: Store;
   key: Buffer;
@@ -66,22 +70,33 @@ export function createAgentAuth(deps: {
   };
 }
 
-export function createApiAuth(tokens: { admin: string; reader?: string }) {
+export function createApiAuth(tokens: { admin: string; reader?: string; session?: SessionReader; now?: () => Date }) {
   return async function apiAuth(request: FastifyRequest): Promise<void> {
     const header = headerValue(request, "authorization");
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
-    if (provided.length === 0) {
-      throw new AppError(401, ERROR_CODES.UNAUTHORIZED, "jeton API requis");
+    if (provided.length > 0) {
+      if (tokenMatches(provided, tokens.admin)) {
+        request.principal = { kind: "admin" };
+        request.authMethod = "bearer";
+        return;
+      }
+      if (tokens.reader && tokenMatches(provided, tokens.reader)) {
+        request.principal = { kind: "reader" };
+        request.authMethod = "bearer";
+        return;
+      }
+      throw new AppError(401, ERROR_CODES.UNAUTHORIZED, "jeton API refusé");
     }
-    if (tokenMatches(provided, tokens.admin)) {
+    const now = tokens.now?.() ?? new Date();
+    if (tokens.session?.valid(headerValue(request, "cookie"), now.getTime())) {
+      if (isMutation(request.method) && headerValue(request, "x-infra-request") !== "1") {
+        throw new AppError(403, ERROR_CODES.FORBIDDEN, "en-tête de session manquant");
+      }
       request.principal = { kind: "admin" };
+      request.authMethod = "session";
       return;
     }
-    if (tokens.reader && tokenMatches(provided, tokens.reader)) {
-      request.principal = { kind: "reader" };
-      return;
-    }
-    throw new AppError(401, ERROR_CODES.UNAUTHORIZED, "jeton API refusé");
+    throw new AppError(401, ERROR_CODES.UNAUTHORIZED, "jeton API requis");
   };
 }
 
@@ -108,4 +123,8 @@ function headerValue(request: FastifyRequest, name: string): string | undefined 
     return value[0];
   }
   return undefined;
+}
+
+function isMutation(method: string): boolean {
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
 }

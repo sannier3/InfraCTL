@@ -38,6 +38,37 @@ Champs utiles à l'affichage : `id`, `name`, `type`, `version`, `presence` (`ONL
 
 `ONLINE` signifie un heartbeat récent. `UNREACHABLE` puis `OFFLINE` suivent `agents.unreachableAfterSeconds` (30) et `agents.offlineAfterSeconds` (60). Seul un agent `ONLINE` reçoit un nouveau job.
 
+## Gérer les agents
+
+Ces routes exigent `apiToken`. `readToken` répond `403`. Le secret circule seulement dans le corps de la requête et n'apparaît dans aucune réponse.
+
+`POST /api/v1/agents` enregistre un agent. `409` si l'identifiant existe déjà.
+
+```json
+{
+  "id": "edge-01",
+  "name": "Bordure",
+  "type": "linux-node",
+  "secret": "un-secret-d-au-moins-16",
+  "maxConcurrency": 4,
+  "capabilities": ["system", "apt", "local.metrics"]
+}
+```
+
+`name`, `maxConcurrency` et `capabilities` sont optionnels. Sans `capabilities`, le serveur applique celles du type : `system`, `apt` et `local.metrics` pour `linux-node`. Le type ne se change pas ensuite. La réponse est la fiche agent, sans secret. Le même secret doit être écrit dans le YAML de la machine : l'API ne pousse pas la configuration.
+
+`PATCH /api/v1/agents/{id}` modifie `name`, `maxConcurrency` ou `capabilities`. Au moins un champ est requis.
+
+`POST /api/v1/agents/{id}/secret` remplace le secret.
+
+```json
+{ "secret": "un-autre-secret-16" }
+```
+
+L'ancien secret cesse de signer dès la réponse. Le corps de la réponse reste la fiche agent.
+
+`DELETE /api/v1/agents/{id}` retire l'agent et répond `204`. Les machines, jobs et alertes qui le citaient gardent leur historique, avec `agentId` vide. L'agent déjà installé recevra `401` à son prochain appel.
+
 ## Machines
 
 `GET /api/v1/machines`

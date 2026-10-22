@@ -62,13 +62,22 @@ Un agent hors ligne au moment de l'assignation donne `SKIPPED`, pas un échec de
 
 Une machine n'est pas créée par l'API de gestion. L'agent l'annonce dans son inventaire, après son premier heartbeat réussi. Tant que l'agent n'a pas envoyé d'inventaire, `GET /api/v1/machines` peut être vide alors que `GET /api/v1/agents` montre déjà l'agent `ONLINE`.
 
-L'enregistrement de l'agent lui-même se fait sur le serveur, en ligne de commande, avant le premier contact :
+L'enregistrement de l'agent se fait avant le premier contact, par un administrateur. Deux chemins équivalents :
 
 ```bash
 pnpm agent:register -- --id edge-01 --name edge-01 --type linux-node --secret "un-secret-d-au-moins-16"
 ```
 
-Le même identifiant et le même secret sont écrits dans le YAML de la machine. Il n'existe pas de route pour créer ou modifier un agent depuis la page PHP.
+```http
+POST /api/v1/agents
+Authorization: Bearer <apiToken>
+```
+
+```json
+{ "id": "edge-01", "name": "edge-01", "type": "linux-node", "secret": "un-secret-d-au-moins-16" }
+```
+
+Le même identifiant et le même secret sont écrits dans le YAML de la machine. La réponse de l'API ne contient pas le secret. Il n'existe pas d'auto-inscription. Le détail des routes de gestion est dans [api.md](api.md).
 
 ## Ce que la page peut montrer
 

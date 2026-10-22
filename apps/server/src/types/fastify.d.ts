@@ -6,5 +6,6 @@ declare module "fastify" {
     rawBody?: string;
     agentId?: string;
     principal?: Principal;
+    authMethod?: "bearer" | "session";
   }
 }

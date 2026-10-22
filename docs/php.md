@@ -48,6 +48,17 @@ final class InfraClient
         return $this->request("POST", $path, [], $body);
     }
 
+    /** @param array<string, mixed> $body */
+    public function patch(string $path, array $body): array
+    {
+        return $this->request("PATCH", $path, [], $body);
+    }
+
+    public function delete(string $path): array
+    {
+        return $this->request("DELETE", $path, [], null);
+    }
+
     /**
      * @param array<string, scalar|null> $query
      * @param array<string, mixed>|null $body
@@ -295,12 +306,34 @@ $client->post("/api/v1/jobs/" . rawurlencode($jobId) . "/cancel", []);
 
 Le corps est un objet vide. Un job `RUNNING` répond `409` / `JOB_NOT_CANCELLABLE`. Cette route exige `apiToken`.
 
+## Enregistrer un agent
+
+`INFRA_TOKEN` doit être `apiToken`. Le secret est choisi ici, envoyé une fois, puis recopié dans le YAML de la machine. La réponse ne le contient pas.
+
+```php
+$secret = "un-secret-d-au-moins-16";
+$agent = $client->post("/api/v1/agents", [
+    "id" => "edge-01",
+    "name" => "edge-01",
+    "type" => "linux-node",
+    "secret" => $secret,
+]);
+echo "<p>Agent " . h((string) $agent["id"]) . " enregistré</p>";
+
+$client->patch("/api/v1/agents/edge-01", ["name" => "Bordure"]);
+$client->post("/api/v1/agents/edge-01/secret", ["secret" => "un-autre-secret-16"]);
+$client->delete("/api/v1/agents/edge-01");
+```
+
+`DELETE` répond `204` sans JSON. Le client ci-dessus traite un corps vide comme un tableau vide.
+
 ## Erreurs à traiter dans la page
 
 | Code | Situation |
 | --- | --- |
 | `UNAUTHORIZED` | Jeton absent ou incorrect |
 | `FORBIDDEN` | Jeton lecteur sur une route d'administrateur |
+| `CONFLICT` | Identifiant d'agent déjà enregistré |
 | `NOT_FOUND` | Machine, agent ou job inconnu |
 | `ACTION_DISABLED` | Action du catalogue non activée, par exemple `apt.upgrade` |
 | `NO_TARGETS` | Sélecteur qui ne vise aucune machine compatible |

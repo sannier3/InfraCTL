@@ -37,6 +37,7 @@ export interface Store {
   ping(): Promise<void>;
   insertAgent(input: NewAgent): Promise<"created" | "exists">;
   rotateAgentSecret(agentId: string, secretCiphertext: string): Promise<boolean>;
+  deleteAgent(id: string): Promise<boolean>;
   findAgent(id: string): Promise<AgentRecord | null>;
   findAgentSecret(id: string): Promise<string | null>;
   listAgents(): Promise<AgentRecord[]>;

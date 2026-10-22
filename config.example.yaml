@@ -39,6 +39,12 @@ concurrency:
   perMachineWrite: 1
   proxmoxHostMaintenancePerCluster: 1
 
+ui:
+  enabled: true
+  # Mot de passe de la page /ui. Le remplacer avant tout usage réel.
+  password: dev-ui-password-change
+  sessionHours: 12
+
 scheduler:
   tickMs: 1000
   noncePurgeEveryTicks: 60

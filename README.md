@@ -120,7 +120,7 @@ Sous un shell Unix, remplacer `copy` par `cp`.
 
 `pnpm prisma:migrate` applique les migrations déjà versionnées (`prisma migrate deploy`). La base de développement est MariaDB 11, base `infra_manager`, utilisateur `infra`, mot de passe `infra_dev_password`.
 
-Le serveur écoute sur `0.0.0.0:8080`. La documentation OpenAPI est sur `http://127.0.0.1:8080/docs` tant que `exposeSwagger` vaut `true`.
+Le serveur écoute sur `0.0.0.0:8080`. L'interface de gestion est sur `http://127.0.0.1:8080/ui`, avec le mot de passe `ui.password`. La documentation OpenAPI est sur `http://127.0.0.1:8080/docs` tant que `exposeSwagger` vaut `true`.
 
 Générer une clé de chiffrement des secrets :
 
@@ -202,4 +202,4 @@ Les tests ne lancent ni `apt-get` ni `pct`. Ils passent par `FakeProcessRunner`.
 1. Mode `proxmox-node`, `pct list`, `pct exec`, métriques Proxmox, guests `UNKNOWN`.
 2. systemd, journald, lots sur tout le parc, alertes d'exploitation, maintenance d'hôte sérialisée dans le cluster.
 
-L'interface web n'est pas au périmètre de cette version. Le résumé du projet est dans [docs/context.md](docs/context.md). L'usage depuis une page PHP, l'authentification par jeton et la forme des réponses sont décrits dans [docs/README.md](docs/README.md).
+L'interface de gestion est sur `/ui` et se déverrouille avec le mot de passe de `config.yaml`. Le résumé du projet est dans [docs/context.md](docs/context.md). L'usage depuis une page PHP, l'authentification par jeton et la forme des réponses sont décrits dans [docs/README.md](docs/README.md).

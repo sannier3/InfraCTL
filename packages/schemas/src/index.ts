@@ -363,6 +363,23 @@ export const serverConfigSchema = z
         metricPurgeEveryTicks: positiveInt.default(3600),
       })
       .strict(),
+    ui: z
+      .object({
+        enabled: z.boolean().default(false),
+        password: z.string().min(12).max(256).optional(),
+        sessionHours: z.number().int().min(1).max(720).default(12),
+      })
+      .strict()
+      .superRefine((value, context) => {
+        if (value.enabled && (value.password === undefined || value.password.length < 12)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["password"],
+            message: "mot de passe requis lorsque l'interface est activée",
+          });
+        }
+      })
+      .default({ enabled: false, sessionHours: 12 }),
   })
   .strict();
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
@@ -482,6 +499,40 @@ export const aptCheckResultSchema = z
   })
   .strict();
 export type AptCheckResult = z.infer<typeof aptCheckResultSchema>;
+
+const agentNameSchema = z.string().trim().min(1).max(128);
+const agentSecretSchema = z.string().min(16).max(256);
+const agentConcurrencySchema = z.number().int().min(1).max(10_000);
+const agentCapabilitiesSchema = z.array(capabilitySchema).min(1).max(32);
+
+export const agentCreateBodySchema = z
+  .object({
+    id: agentIdSchema,
+    name: agentNameSchema.optional(),
+    type: agentTypeSchema,
+    secret: agentSecretSchema,
+    maxConcurrency: agentConcurrencySchema.optional(),
+    capabilities: agentCapabilitiesSchema.optional(),
+  })
+  .strict();
+export type AgentCreateBody = z.infer<typeof agentCreateBodySchema>;
+
+export const agentUpdateBodySchema = z
+  .object({
+    name: agentNameSchema.optional(),
+    maxConcurrency: agentConcurrencySchema.optional(),
+    capabilities: agentCapabilitiesSchema.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, { message: "aucune modification" });
+export type AgentUpdateBody = z.infer<typeof agentUpdateBodySchema>;
+
+export const agentSecretBodySchema = z
+  .object({
+    secret: agentSecretSchema,
+  })
+  .strict();
+export type AgentSecretBody = z.infer<typeof agentSecretBodySchema>;
 
 export function formatConfigIssues(error: z.ZodError): string {
   return error.issues

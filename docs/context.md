@@ -8,7 +8,7 @@ Ce fichier est le résumé stable du dépôt. Le détail d'usage est dans [docs/
 
 ## État actuel
 
-Version de socle, sans interface web.
+Version de socle, avec une interface interne en plus de l'API.
 
 Présent et exécutable :
 
@@ -26,7 +26,7 @@ Présent dans le modèle, non exécuté :
 - `apt.upgrade`, systemd, journald, redémarrage, maintenance d'hôte Proxmox : noms du catalogue, réponse `422` / `ACTION_DISABLED` ;
 - fusion d'inventaire Proxmox, identité `clusterId` + `vmid`, guests `UNKNOWN` si le nœud est offline : logique serveur testée, sans commandes `pct`.
 
-Il n'y a pas de page d'administration. `GET /docs` est la documentation OpenAPI quand `exposeSwagger` vaut `true`. Une page PHP consomme l'API ; le guide est [php.md](php.md).
+L'interface humaine est sur `/ui`. Elle est protégée par `ui.password` dans la configuration du serveur, pas par un compte. Le jeton Bearer reste le moyen d'appel pour une page PHP. `GET /docs` est la documentation OpenAPI quand `exposeSwagger` vaut `true`. Le guide PHP est [php.md](php.md), l'interface est décrite dans [interface.md](interface.md).
 
 ## Invariants
 
@@ -38,7 +38,7 @@ Ces règles priment sur une fonctionnalité plus simple.
 4. Une action mutante est exclusive sur une machine. Un job `UNKNOWN` ou `INTERRUPTED` sur une action mutante n'est jamais relancé. L'acquittement ne le remet pas en file.
 5. L'état vivant est revérifié juste avant l'exécution. Un état ancien en base ne suffit pas.
 6. Aucun secret dans les logs : jeton d'API, secret HMAC, en-tête `Authorization`, mots de passe. Le secret agent est chiffré en base et absent des réponses.
-7. Les agents ne s'inscrivent pas eux-mêmes. L'enregistrement est `pnpm agent:register`.
+7. Les agents ne s'inscrivent pas eux-mêmes. Un administrateur les enregistre avec `pnpm agent:register` ou `POST /api/v1/agents`. Le secret est fourni à la création et n'est jamais renvoyé.
 8. Pas d'agent dans les LXC. Les actions LXC passeront par `pct exec` depuis l'hôte Proxmox, jamais par SSH ni `pct enter`.
 9. L'identité stable d'un guest est `clusterId` + `vmid`. Le nœud courant est dynamique. Un job `QUEUED` suit la migration ; un job déjà `RUNNING` reste sur l'agent qui l'a commencé.
 10. Un nœud Proxmox offline ne marque pas ses guests `STOPPED`. Ils passent à `UNKNOWN`, avec une alerte groupée. Aucun job n'est envoyé vers ces guests.
@@ -88,7 +88,7 @@ Un agent `OFFLINE` produit `SKIPPED` / `SKIPPED_OFFLINE`. Un agent `UNREACHABLE`
 
 ## Agent linux-node
 
-Configuration locale, par exemple `apps/agent/config.example.yaml` ou `/etc/infra-agent/config.yaml`. Le secret du fichier est celui passé à `agent:register`.
+Configuration locale, par exemple `apps/agent/config.example.yaml` ou `/etc/infra-agent/config.yaml`. Le secret du fichier est celui choisi à l'enregistrement, en ligne de commande ou par l'API.
 
 `apt.check` exige root dans cette version. Le unit `apps/agent/deploy/infra-agent.service` le dit. La séparation futur daemon non privilégié / helper privilégié n'existe pas encore.
 
@@ -98,4 +98,4 @@ Boucles indépendantes : heartbeat, inventaire, ressources, long polling, worker
 
 ## Hors périmètre tant que le socle n'est pas étendu
 
-Ne pas ajouter d'interface web avant d'étendre l'API et l'agent. Ne pas implémenter `pct` tant que le mode `proxmox-node` n'est pas le sujet. Ne pas activer `apt.upgrade` sans simulation, confirmation des suppressions, et interdiction de relance après `UNKNOWN`.
+Ne pas implémenter `pct` tant que le mode `proxmox-node` n'est pas le sujet. Ne pas activer `apt.upgrade` sans simulation, confirmation des suppressions, et interdiction de relance après `UNKNOWN`.

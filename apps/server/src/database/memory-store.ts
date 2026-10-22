@@ -68,6 +68,37 @@ export class MemoryStore implements Store {
     return true;
   }
 
+  async deleteAgent(id: string): Promise<boolean> {
+    if (!this.agents.delete(id)) {
+      return false;
+    }
+    this.secrets.delete(id);
+    const kept = this.nonces.filter((nonce) => nonce.agentId !== id);
+    this.nonces.length = 0;
+    this.nonces.push(...kept);
+    for (const [machineId, machine] of this.machines) {
+      if (machine.agentId === id) {
+        this.machines.set(machineId, { ...machine, agentId: null });
+      }
+    }
+    for (const [nodeId, node] of this.nodes) {
+      if (node.agentId === id) {
+        this.nodes.set(nodeId, { ...node, agentId: null });
+      }
+    }
+    for (const [jobId, job] of this.jobs) {
+      if (job.agentId === id) {
+        this.jobs.set(jobId, { ...job, agentId: null });
+      }
+    }
+    for (const [alertId, alert] of this.alerts) {
+      if (alert.agentId === id) {
+        this.alerts.set(alertId, { ...alert, agentId: null });
+      }
+    }
+    return true;
+  }
+
   async findAgent(id: string): Promise<AgentRecord | null> {
     const agent = this.agents.get(id);
     return agent ? clone(agent) : null;

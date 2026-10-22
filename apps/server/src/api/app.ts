@@ -11,7 +11,10 @@ import {
 import { z } from "zod";
 import {
   actionRequestSchema,
+  agentCreateBodySchema,
   agentJobSchema,
+  agentSecretBodySchema,
+  agentUpdateBodySchema,
   heartbeatBodySchema,
   inventoryBodySchema,
   jobCompleteBodySchema,
@@ -23,6 +26,9 @@ import {
 } from "@infra/schemas";
 import { ERROR_CODES, JOB_STATUSES, MACHINE_STATUSES, MACHINE_TYPES } from "@infra/types";
 import { createAgentAuth, createApiAuth, requireAgentId } from "../auth/http.js";
+import { AgentAdmin } from "../agents/admin.js";
+import { createSessionService } from "../ui/session.js";
+import { registerUi, uiDirectory } from "../ui/routes.js";
 import { decodeCredentialsKey } from "../crypto/secrets.js";
 import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
@@ -172,6 +178,7 @@ export async function buildApp(deps: AppDeps): Promise<{
     offlineAfterSeconds: deps.config.agents.offlineAfterSeconds,
     hideStoppedAfterSeconds: deps.config.inventory.hideStoppedAfterSeconds,
   });
+  const agents = new AgentAdmin(deps.store, key);
   const scheduler = new Scheduler(jobs, inventory, deps.store, hub, {
     tickMs: deps.config.scheduler.tickMs,
     noncePurgeEveryTicks: deps.config.scheduler.noncePurgeEveryTicks,
@@ -190,6 +197,7 @@ export async function buildApp(deps: AppDeps): Promise<{
       redact: {
         paths: [
           "req.headers.authorization",
+          "req.headers.cookie",
           "req.headers['x-signature']",
           "secret",
           "password",
@@ -225,6 +233,15 @@ export async function buildApp(deps: AppDeps): Promise<{
       done(new AppError(400, ERROR_CODES.VALIDATION_ERROR, "JSON invalide"), undefined);
     }
   });
+  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => {
+    const raw = typeof body === "string" ? body : "";
+    const params = new URLSearchParams(raw);
+    const value: Record<string, string> = {};
+    for (const [keyName, item] of params) {
+      value[keyName] = item;
+    }
+    done(null, value);
+  });
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
@@ -258,9 +275,14 @@ export async function buildApp(deps: AppDeps): Promise<{
     await app.register(fastifySwaggerUi, { routePrefix: "/docs" });
   }
 
+  const session =
+    deps.config.ui.enabled && deps.config.ui.password
+      ? createSessionService(key, deps.config.ui.sessionHours * 3_600_000)
+      : undefined;
   const apiAuth = createApiAuth({
     admin: deps.config.auth.apiToken,
     ...(deps.config.auth.readToken ? { reader: deps.config.auth.readToken } : {}),
+    ...(session ? { session, now } : {}),
   });
   const agentAuth = createAgentAuth({
     store: deps.store,
@@ -314,6 +336,23 @@ export async function buildApp(deps: AppDeps): Promise<{
         throw new AppError(404, ERROR_CODES.NOT_FOUND, "agent introuvable");
       }
       return presentAgent(agent);
+    });
+    scope.post("/agents", { schema: { body: agentCreateBodySchema, response: withErrors(agentResponseSchema) } }, async (request) => {
+      requireAdmin(request.principal);
+      return presentAgent(await agents.register(request.body, now()));
+    });
+    scope.patch("/agents/:id", { schema: { params: idParams, body: agentUpdateBodySchema, response: withErrors(agentResponseSchema) } }, async (request) => {
+      requireAdmin(request.principal);
+      return presentAgent(await agents.update(request.params.id, request.body));
+    });
+    scope.post("/agents/:id/secret", { schema: { params: idParams, body: agentSecretBodySchema, response: withErrors(agentResponseSchema) } }, async (request) => {
+      requireAdmin(request.principal);
+      return presentAgent(await agents.rotateSecret(request.params.id, request.body));
+    });
+    scope.delete("/agents/:id", { schema: { params: idParams, response: { 204: z.null(), 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema } } }, async (request, reply) => {
+      requireAdmin(request.principal);
+      await agents.remove(request.params.id);
+      return reply.code(204).send(null);
     });
     scope.get("/clusters", { schema: { querystring: paginationQuerySchema, response: withErrors(pageSchema(clusterSchema)) } }, async (request) => {
       const all = await deps.store.listClusters();
@@ -549,6 +588,15 @@ export async function buildApp(deps: AppDeps): Promise<{
     void scheduler.tick();
   }
 
+  if (session && deps.config.ui.password) {
+    registerUi(app, {
+      password: deps.config.ui.password,
+      session,
+      now,
+      directory: uiDirectory(),
+    });
+  }
+
   app.addHook("onClose", async () => {
     scheduler.stop();
   });
@@ -561,4 +609,11 @@ function principalOf(principal: Principal | null | undefined): Principal {
     throw new AppError(401, ERROR_CODES.UNAUTHORIZED, "jeton API requis");
   }
   return principal;
+}
+
+function requireAdmin(principal: Principal | null | undefined): void {
+  const resolved = principalOf(principal);
+  if (resolved.kind !== "admin") {
+    throw new AppError(403, ERROR_CODES.FORBIDDEN, "gestion des agents réservée à un administrateur");
+  }
 }
