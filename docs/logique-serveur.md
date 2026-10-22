@@ -42,8 +42,9 @@ Actions réellement exécutées aujourd'hui :
 | --- | --- |
 | `system.info` | Nom d'hôte, noyau, CPU, mémoire, besoin de redémarrage |
 | `apt.check` | Simulation des mises à jour APT, sans installation |
+| `apt.upgrade` | Même simulation, puis `apt-get upgrade` si aucun paquet n'est retiré |
 
-Les autres noms (`apt.upgrade`, systemd, journal, Proxmox, redémarrage) existent dans le catalogue et répondent `422` avec le code `ACTION_DISABLED`.
+Ces trois actions visent un hôte, un LXC, une VM ou une machine physique. Les autres noms (systemd, journal, Proxmox, redémarrage) existent dans le catalogue et répondent `422` avec le code `ACTION_DISABLED`.
 
 ## Cycle d'une action
 

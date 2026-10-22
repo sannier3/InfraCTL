@@ -18,9 +18,14 @@ describe("catalogue d'actions", () => {
     }
   });
 
-  it("n'active dans cette version que system.info et apt.check", () => {
+  it("active system.info, apt.check et apt.upgrade sur hôte, LXC et VM", () => {
     const enabled = ACTION_NAMES.filter((name) => ACTION_CATALOG[name].enabled);
-    expect(enabled.sort()).toEqual(["apt.check", "system.info"]);
+    expect(enabled.sort()).toEqual(["apt.check", "apt.upgrade", "system.info"]);
+    for (const name of ["system.info", "apt.check", "apt.upgrade"] as const) {
+      expect(ACTION_CATALOG[name].supportedTargets).toEqual(
+        expect.arrayContaining(["PROXMOX_NODE", "LXC", "VM", "PHYSICAL"]),
+      );
+    }
   });
 
   it("marque les actions mutantes comme non rejouables automatiquement", () => {

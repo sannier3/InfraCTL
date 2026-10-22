@@ -200,6 +200,7 @@ async function executeJob(
       resolvedArguments: outcome.args,
       errorCode: outcome.errorCode ?? "PROCESS_FAILED",
       errorMessage: outcome.errorMessage ?? "échec",
+      ...(outcome.result ? { result: outcome.result } : {}),
     });
   } finally {
     if (aptHeld) {

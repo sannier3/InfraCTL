@@ -35,6 +35,12 @@ const STATUS = {
 };
 
 const CAPABILITIES = ["system", "apt", "systemd", "journal", "local.metrics", "proxmox.inventory", "proxmox.resources", "lxc.exec", "proxmox.host"];
+const SHARED_TARGETS = ["PROXMOX_NODE", "LXC", "VM", "PHYSICAL"];
+const ACTIONS = [
+  { name: "system.info", label: "État du système", targets: SHARED_TARGETS },
+  { name: "apt.check", label: "Voir les mises à jour", targets: SHARED_TARGETS },
+  { name: "apt.upgrade", label: "Mettre à jour", targets: SHARED_TARGETS },
+];
 const TERMINAL = new Set(["SUCCESS", "FAILED", "SKIPPED", "INTERRUPTED", "UNKNOWN", "CANCELLED", "REQUIRES_CONFIRMATION"]);
 
 window.addEventListener("popstate", () => { void render(); });
@@ -157,7 +163,9 @@ async function machineDetail(id) {
   const memory = current ? percent(current.memoryUsed, current.memoryTotal) : "—";
   const snapshot = updates.data?.[0];
   const packages = (snapshot?.packages ?? []).map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.currentVersion ?? "—")}</td><td>${escapeHtml(item.newVersion ?? "—")}</td><td>${escapeHtml(item.changeType)}</td></tr>`).join("");
-  return pageHeading(machine.displayName, `${machine.type} · ${machine.hostname}`, `<button class="primary" type="button" data-action data-machine="${escapeHtml(machine.id)}">Lancer une action</button>`)
+  const canUpgrade = ACTIONS.some((action) => action.name === "apt.upgrade" && action.targets.includes(machine.type));
+  const upgrade = canUpgrade ? `<button class="primary" type="button" data-upgrade="${escapeHtml(machine.id)}">Mettre à jour</button>` : "";
+  return pageHeading(machine.displayName, `${machine.type} · ${machine.hostname}`, `${upgrade}<button class="ghost" type="button" data-action data-machine="${escapeHtml(machine.id)}" data-type="${escapeHtml(machine.type)}">Lancer une action</button>`)
     + `<section class="grid stagger">${stat("État", machine.status)}${stat("CPU", current ? `${current.cpuUsage} %` : "—")}${stat("Mémoire", memory)}${stat("Mises à jour", snapshot ? String(snapshot.availableCount) : "—")}</section>`
     + `<section class="section panel"><h2>Mises à jour APT</h2>${snapshot ? table(["Paquet", "Version", "Nouvelle", "Changement"], packages || emptyRow(4)) : `<p class="empty">Aucun apt.check terminé.</p>`}</section>`
     + `<section class="section panel"><h2>Travaux</h2>${jobRows(jobsPage.data ?? [])}</section>`;
@@ -238,7 +246,8 @@ document.addEventListener("click", (event) => {
   if (!target) return;
   if (target.dataset.createAgent !== undefined) openAgentDialog();
   if (target.dataset.edit) void openEditDialog(target.dataset.edit);
-  if (target.dataset.action !== undefined) openActionDialog(target.dataset.machine ?? "");
+  if (target.dataset.upgrade) openUpgradeDialog(target.dataset.upgrade);
+  if (target.dataset.action !== undefined) openActionDialog(target.dataset.machine ?? "", target.dataset.type ?? "");
   if (target.dataset.cancel) void mutate("Annulé", () => api(`/jobs/${target.dataset.cancel}/cancel`, { method: "POST", body: {} }));
   if (target.dataset.ack) void mutate("Acquitté", () => api(`/jobs/${target.dataset.ack}/acknowledge`, { method: "POST", body: {} }));
   if (target.dataset.deleteAgent) {
@@ -294,9 +303,23 @@ async function openEditDialog(id) {
   });
 }
 
-function openActionDialog(machineId) {
+function openUpgradeDialog(machineId) {
+  openDialog("Mettre à jour", `<form id="dialog-form" class="form-grid">
+    <p>Installe les mises à jour APT de cette machine, qu'elle soit un hôte, un LXC ou une VM. Une simulation est refaite avant. Si un paquet doit être supprimé, l'installation ne démarre pas.</p>
+    <div class="actions"><button class="ghost" type="button" data-close>Annuler</button><button class="primary" type="submit">Mettre à jour</button></div>
+  </form>`, async () => {
+    const job = await api("/actions", { method: "POST", body: { action: "apt.upgrade", requestedBy: "interface", selector: { type: "machine", id: machineId } } });
+    closeDialog();
+    go(`/ui/jobs/${encodeURIComponent(job.id)}`);
+  });
+}
+
+function openActionDialog(machineId, machineType) {
+  const options = ACTIONS.filter((action) => !machineType || action.targets.includes(machineType))
+    .map((action) => `<option value="${action.name}">${escapeHtml(action.label)}</option>`)
+    .join("");
   openDialog("Lancer une action", `<form id="dialog-form" class="form-grid">
-    <div class="field"><label>Action</label><select name="action"><option value="system.info">system.info</option><option value="apt.check">apt.check</option></select></div>
+    <div class="field"><label>Action</label><select name="action">${options}</select></div>
     <div class="field"><label>Cible</label><select name="selector">${machineId ? "" : ""}<option value="machine">Une machine</option><option value="machines">Plusieurs machines</option><option value="fleet">Tout le parc</option><option value="cluster">Un cluster</option><option value="proxmox-node">Un nœud Proxmox</option></select></div>
     ${field("Identifiant machine ou nœud", "id", "text", machineId)}
     <div class="field"><label>Identifiants, un par ligne</label><textarea name="ids" rows="4"></textarea></div>

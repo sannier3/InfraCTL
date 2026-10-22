@@ -10,11 +10,11 @@ Les écrans couvrent ce que l'API de gestion sait faire :
 | --- | --- |
 | Vue d'ensemble | Santé, agents, travaux récents |
 | Agents | Créer, renommer, concurrence, capacités, nouveau secret, retirer |
-| Machines | Liste, détail, ressources, dernier `apt.check`, travaux |
-| Travaux | Lancer `system.info` ou `apt.check`, suivre l'état, lire les journaux, annuler, acquitter |
+| Machines | Liste, détail, ressources, dernier `apt.check`, bouton Mettre à jour, travaux |
+| Travaux | Lancer `system.info`, `apt.check` ou `apt.upgrade`, suivre l'état, lire les journaux, annuler, acquitter |
 | Clusters | Clusters et nœuds remontés par un inventaire Proxmox |
 | Alertes | Alertes ouvertes |
 
 Créer un agent ici équivaut à `pnpm agent:register`. Le secret saisi doit ensuite être recopié dans le YAML de la machine. L'écran ne le réaffiche pas.
 
-Les actions proposées sont celles qui sont activées. `apt.upgrade` et le mode d'exécution `proxmox-node` restent hors service même si un agent de ce type peut déjà être enregistré.
+Les actions proposées sont les mêmes sur un hôte, un LXC, une VM et une machine physique : état du système, consultation APT, mise à jour APT. Le mode d'exécution `proxmox-node` reste hors service même si un agent de ce type peut déjà être enregistré. La mise à jour d'un LXC attend cet agent de nœud.

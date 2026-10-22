@@ -216,7 +216,7 @@ Le formulaire PHP poste le nom d'action et l'identifiant de machine. PHP constru
 ```php
 if (($_SERVER["REQUEST_METHOD"] ?? "") === "POST") {
     $action = (string) ($_POST["action"] ?? "");
-    if (!in_array($action, ["system.info", "apt.check"], true)) {
+    if (!in_array($action, ["system.info", "apt.check", "apt.upgrade"], true)) {
         http_response_code(400);
         exit("action non proposée");
     }
@@ -335,7 +335,7 @@ $client->delete("/api/v1/agents/edge-01");
 | `FORBIDDEN` | Jeton lecteur sur une route d'administrateur |
 | `CONFLICT` | Identifiant d'agent déjà enregistré |
 | `NOT_FOUND` | Machine, agent ou job inconnu |
-| `ACTION_DISABLED` | Action du catalogue non activée, par exemple `apt.upgrade` |
+| `ACTION_DISABLED` | Action du catalogue non activée, par exemple `apt.refresh` |
 | `NO_TARGETS` | Sélecteur qui ne vise aucune machine compatible |
 | `INCOMPATIBLE_TARGET` | Type de machine refusé pour cette action |
 | `VALIDATION_ERROR` | JSON rejeté, souvent un champ en trop comme `command` |

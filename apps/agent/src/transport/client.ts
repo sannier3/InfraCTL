@@ -87,6 +87,7 @@ export class ServerClient {
       resolvedArguments: string[] | null;
       errorCode: string;
       errorMessage: string;
+      result?: Record<string, unknown>;
     },
   ): Promise<void> {
     await this.send("POST", `/api/v1/agent/jobs/${jobId}/fail`, body);

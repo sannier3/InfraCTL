@@ -181,11 +181,12 @@ Un job `RUNNING` ne peut pas être annulé à distance : l'agent n'écoute pas. 
 | --- | --- | --- |
 | `system.info` | READ | active |
 | `apt.check` | READ | active, simulation `apt-get -s` |
-| `apt.refresh`, `apt.upgrade` | WRITE | enregistrées, désactivées |
+| `apt.upgrade` | WRITE | active sur hôte, LXC, VM et machine physique ; simulation, puis installation seulement s'il n'y a pas de suppression |
+| `apt.refresh` | WRITE | enregistrée, désactivée |
 | systemd, journal, Proxmox, LXC | READ ou WRITE | enregistrées, désactivées |
 | `system.reboot`, `system.shutdown`, `proxmox.host.update` | CRITICAL | enregistrées, désactivées |
 
-`apt.check` ne modifie pas le système. S'il voit des paquets supprimés, le résultat porte `requiresConfirmation: true` pour qu'un futur `apt.upgrade` puisse s'arrêter avant d'agir. Deux actions mutantes ne peuvent pas viser la même machine en même temps. Un `apt.upgrade` dont le résultat est `UNKNOWN` ne sera pas relancé automatiquement.
+`apt.check` ne modifie pas le système. `apt.upgrade` refait cette simulation, puis lance `apt-get upgrade` avec des arguments fixes. S'il faut supprimer un paquet, il s'arrête en `REQUIRES_CONFIRMATION` sans rien installer. Deux actions mutantes ne peuvent pas viser la même machine en même temps. Un `apt.upgrade` dont le résultat est `UNKNOWN` ne sera pas relancé automatiquement. L'interface propose le bouton sur un hôte, un LXC, une VM et une machine physique. L'agent linux applique l'installation sur la machine où il tourne. Un LXC sera exécuté par l'agent de son nœud Proxmox lorsque ce mode existera.
 
 ## Vérifications
 

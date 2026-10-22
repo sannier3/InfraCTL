@@ -17,13 +17,13 @@ Présent et exécutable :
 - agent `linux-node` sous systemd, connexions uniquement sortantes ;
 - authentification HMAC des agents, jetons Bearer pour l'API de gestion ;
 - heartbeat, inventaire, métriques locales, long polling, file de jobs persistée ;
-- actions activées : `system.info` et `apt.check` ;
+- actions activées : `system.info`, `apt.check` et `apt.upgrade` ;
 - journaux, audit `executable` + `arguments`, concurrence, jobs parents.
 
 Présent dans le modèle, non exécuté :
 
 - mode `proxmox-node` : l'agent refuse de démarrer dans ce mode ;
-- `apt.upgrade`, systemd, journald, redémarrage, maintenance d'hôte Proxmox : noms du catalogue, réponse `422` / `ACTION_DISABLED` ;
+- systemd, journald, redémarrage, maintenance d'hôte Proxmox : noms du catalogue, réponse `422` / `ACTION_DISABLED` ;
 - fusion d'inventaire Proxmox, identité `clusterId` + `vmid`, guests `UNKNOWN` si le nœud est offline : logique serveur testée, sans commandes `pct`.
 
 L'interface humaine est sur `/ui`. Elle est protégée par `ui.password` dans la configuration du serveur, pas par un compte. Le jeton Bearer reste le moyen d'appel pour une page PHP. `GET /docs` est la documentation OpenAPI quand `exposeSwagger` vaut `true`. Le guide PHP est [php.md](php.md), l'interface est décrite dans [interface.md](interface.md).
@@ -98,4 +98,4 @@ Boucles indépendantes : heartbeat, inventaire, ressources, long polling, worker
 
 ## Hors périmètre tant que le socle n'est pas étendu
 
-Ne pas implémenter `pct` tant que le mode `proxmox-node` n'est pas le sujet. Ne pas activer `apt.upgrade` sans simulation, confirmation des suppressions, et interdiction de relance après `UNKNOWN`.
+Ne pas implémenter `pct` tant que le mode `proxmox-node` n'est pas le sujet. `apt.upgrade` simule avant d'installer, s'arrête si un paquet serait supprimé, et n'est jamais relancé après `UNKNOWN`.

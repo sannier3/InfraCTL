@@ -190,7 +190,7 @@ export const ACTION_CATALOG: { readonly [K in ActionName]: ActionDefinition } = 
     supportedTargets: GUEST_AND_HOST,
     timeoutMs: 60 * 60_000,
     capabilities: ["apt"],
-    enabled: false,
+    enabled: true,
     mutating: true,
     countsAsApt: true,
     hostMaintenance: "never",

@@ -4,7 +4,7 @@ import { agentConfigSchema } from "@infra/schemas";
 import { FakeProcessRunner } from "../src/process/fake-runner.js";
 import { runRegisteredAction } from "../src/actions/registry.js";
 import { parseAptSimulation } from "../src/actions/apt/parse.js";
-import { APT_CHECK_ARGS, APT_CHECK_EXECUTABLE } from "../src/adapters/local-linux/apt.js";
+import { APT_CHECK_ARGS, APT_CHECK_EXECUTABLE, APT_UPGRADE_ARGS, APT_UPGRADE_EXECUTABLE } from "../src/adapters/local-linux/apt.js";
 import { cpuPercent, parseOsRelease, parseProcNetDev, parseProcStat } from "../src/adapters/local-linux/system.js";
 import type { SystemProbe } from "../src/adapters/local-linux/probe.js";
 import { interpretPctStatus, parseGuestList, pctStatusArgs } from "../src/proxmox/parse.js";
@@ -72,6 +72,79 @@ Conf bash (5.2.15-2+b8 Debian:12.8/stable-security [amd64])
     expect(runner.calls).toHaveLength(0);
     expect(outcome.status).toBe("SUCCESS");
     expect(outcome.result).toMatchObject({ hostname: "vm-web-01" });
+  });
+});
+
+describe("apt.upgrade", () => {
+  it("installe après simulation sur une VM et sur un hôte", async () => {
+    for (const machineType of ["VM", "PROXMOX_NODE"] as const) {
+      const runner = new FakeProcessRunner(async (request) => ({
+        exitCode: 0,
+        stdout: request.args.includes("-s") ? "Inst bash [1] (2 Debian:12/stable [amd64])\n" : "",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+        signal: null,
+      }));
+      const outcome = await runRegisteredAction({
+        job: { ...job(), action: "apt.upgrade", category: "WRITE", target: { ...job().target, machineType } },
+        runner,
+        probe: probe(),
+        config,
+        signal: new AbortController().signal,
+        log: () => undefined,
+      });
+      expect(outcome.status).toBe("SUCCESS");
+      expect(runner.calls.map((call) => call.args)).toEqual([[...APT_CHECK_ARGS], [...APT_UPGRADE_ARGS]]);
+      expect(runner.calls.every((call) => call.executable === APT_UPGRADE_EXECUTABLE || call.executable === APT_CHECK_EXECUTABLE)).toBe(true);
+      expect(outcome.executable).toBe(APT_UPGRADE_EXECUTABLE);
+      expect(outcome.args).toEqual([...APT_UPGRADE_ARGS]);
+    }
+  });
+
+  it("n'installe pas si la simulation retire un paquet", async () => {
+    const runner = new FakeProcessRunner(async () => ({
+      exitCode: 0,
+      stdout: "Inst bash [1] (2 Debian:12/stable [amd64])\nRemv old [1]\n",
+      stderr: "",
+      durationMs: 4,
+      timedOut: false,
+      signal: null,
+    }));
+    const outcome = await runRegisteredAction({
+      job: { ...job(), action: "apt.upgrade", category: "WRITE" },
+      runner,
+      probe: probe(),
+      config,
+      signal: new AbortController().signal,
+      log: () => undefined,
+    });
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]?.args).toEqual([...APT_CHECK_ARGS]);
+    expect(outcome.errorCode).toBe("REQUIRES_CONFIRMATION");
+    expect(outcome.result).toMatchObject({ requiresConfirmation: true });
+  });
+
+  it("refuse une cible LXC sans lancer apt-get", async () => {
+    const runner = new FakeProcessRunner(async () => {
+      throw new Error("ne doit pas être appelé");
+    });
+    const outcome = await runRegisteredAction({
+      job: {
+        ...job(),
+        action: "apt.upgrade",
+        category: "WRITE",
+        target: { ...job().target, machineType: "LXC", guest: { vmid: 101, guestType: "LXC", clusterId: "production" } },
+      },
+      runner,
+      probe: probe(),
+      config,
+      signal: new AbortController().signal,
+      log: () => undefined,
+    });
+    expect(runner.calls).toHaveLength(0);
+    expect(outcome.status).toBe("SKIPPED");
+    expect(outcome.errorCode).toBe("INCOMPATIBLE_TARGET");
   });
 });
 

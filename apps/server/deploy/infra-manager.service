@@ -1,0 +1,25 @@
+[Unit]
+Description=Serveur Infra Manager
+Documentation=file:/opt/infra-manager/README.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Root est demandé pour cette installation du serveur central.
+User=root
+Group=root
+WorkingDirectory=/opt/infra-manager
+Environment=CONFIG_PATH=/opt/infra-manager/config.yaml
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/infra-manager/apps/server/dist/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

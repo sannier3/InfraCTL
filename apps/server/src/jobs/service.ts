@@ -576,6 +576,7 @@ export class JobService {
     if (!updated) {
       throw new AppError(409, ERROR_CODES.CONFLICT, "le job a changé d'état");
     }
+    await this.persistAptSnapshot(updated, body.result);
     return updated;
   }
 
@@ -637,11 +638,20 @@ export class JobService {
   }
 
   private async persistAptSnapshot(job: JobRecord, result: Record<string, unknown> | undefined): Promise<void> {
-    if (!job.machineId || job.action !== "apt.check" || !result) {
+    if (!job.machineId || (job.action !== "apt.check" && job.action !== "apt.upgrade") || !result) {
       return;
     }
-    const parsed = aptCheckResultSchema.safeParse(result);
+    const parsed = aptCheckResultSchema.safeParse({
+      availableCount: result.availableCount,
+      securityCount: result.securityCount,
+      requiresReboot: result.requiresReboot,
+      requiresConfirmation: result.requiresConfirmation,
+      packages: result.packages,
+    });
     if (!parsed.success) {
+      return;
+    }
+    if (job.action === "apt.upgrade" && job.status === "SUCCESS" && parsed.data.availableCount > 0) {
       return;
     }
     await this.store.insertSnapshot({
