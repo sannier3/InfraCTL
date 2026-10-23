@@ -47,6 +47,7 @@ CLUSTER_ID=""
 YES=0
 FRESH=0
 CONFIG_CHANGED=0
+CONFIG_SOURCE=""
 DB_REVIEWED=0
 
 say() { printf '%s\n' "$*"; }
@@ -120,6 +121,9 @@ Agent
   --agent-secret SECRET au moins 16 caractères
   --machine-type VM|PHYSICAL
   --cluster-id ID       requis pour proxmox-node
+  --config FICHIER      configuration complète de l'agent. - lit l'entrée
+                        standard. Le questionnaire est alors ignoré. Une
+                        configuration déjà présente est copiée, puis remplacée.
 
 La configuration du serveur est /etc/infra-manager/config.yaml.
 Celle de l'agent est /etc/infra-agent/config.yaml.
@@ -288,6 +292,11 @@ parse_args() {
         CLUSTER_ID="$2"
         shift
         ;;
+      --config)
+        need_arg "$@"
+        CONFIG_SOURCE="$2"
+        shift
+        ;;
       --yes)
         YES=1
         ;;
@@ -306,12 +315,49 @@ parse_args() {
   PURGE="${PURGE:-0}"
 }
 
+materialize_config() {
+  [ -n "$CONFIG_SOURCE" ] || return 0
+  [ "$MODE" = "agent" ] || die "--config s'utilise avec --mode agent."
+  case "$ACTION" in
+    install|configure) ;;
+    *) die "--config s'utilise avec --install ou --configure." ;;
+  esac
+  if [ "$CONFIG_SOURCE" = "-" ]; then
+    CONFIG_SOURCE="$(mktemp /tmp/infra-agent-config.XXXXXXXXXX)"
+    cat > "$CONFIG_SOURCE"
+    chmod 600 "$CONFIG_SOURCE"
+  fi
+  [ -f "$CONFIG_SOURCE" ] || die "Configuration introuvable : $CONFIG_SOURCE"
+  [ -s "$CONFIG_SOURCE" ] || die "La configuration injectée est vide."
+}
+
 need_root() {
   if [ "$(id -u)" -eq 0 ]; then
+    if [[ "$CONFIG_SOURCE" == /tmp/infra-agent-config.* ]]; then
+      trap 'rm -f "$CONFIG_SOURCE"' EXIT
+    fi
     return
   fi
   if command -v sudo >/dev/null 2>&1; then
-    exec sudo bash "$0" "$@"
+    if [ -z "$CONFIG_SOURCE" ]; then
+      exec sudo bash "$0" "$@"
+    fi
+    local args=()
+    local take=0
+    for arg in "$@"; do
+      if [ "$take" -eq 1 ]; then
+        args+=("$CONFIG_SOURCE")
+        take=0
+        continue
+      fi
+      if [ "$arg" = "--config" ]; then
+        args+=("--config")
+        take=1
+        continue
+      fi
+      args+=("$arg")
+    done
+    exec sudo bash "$0" "${args[@]}"
   fi
   die "Lancez cette commande avec root ou sudo."
 }
@@ -1542,8 +1588,12 @@ configure_agent() {
   install_node
   local cfg reviewed=0
   cfg="$(agent_config_file)"
-  decide_agent_config "$cfg" review
-  if [ -t 0 ] && [ "$CONFIG_CHANGED" -eq 0 ] && [ -f "$cfg" ]; then
+  if [ -n "$CONFIG_SOURCE" ]; then
+    apply_injected_agent_config "$cfg" "$AGENT_ROOT"
+  else
+    decide_agent_config "$cfg" review
+  fi
+  if [ -z "$CONFIG_SOURCE" ] && [ -t 0 ] && [ "$CONFIG_CHANGED" -eq 0 ] && [ -f "$cfg" ]; then
     reviewed=1
     say "Passage en revue. Entrée conserve le réglage affiché."
     review_agent_config "$cfg"
@@ -1685,6 +1735,52 @@ JS
   chmod 0600 "$file"
 }
 
+validate_agent_config() {
+  local file="$1"
+  local root="$2"
+  local schema="$root/packages/schemas/dist/index.js"
+  local pkg="$root/apps/server/package.json"
+  [ -f "$schema" ] || die "Schéma agent introuvable. La construction a échoué."
+  [ -f "$pkg" ] || die "Le paquet serveur est introuvable dans $root."
+  node --input-type=module - "$file" "$pkg" "$schema" <<'JS'
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [file, pkg, schema] = process.argv.slice(2);
+const { parse } = createRequire(pkg)("yaml");
+const { agentConfigSchema } = await import(pathToFileURL(schema).href);
+let doc;
+try {
+  doc = parse(readFileSync(file, "utf8"));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "YAML illisible");
+  process.exit(1);
+}
+const result = agentConfigSchema.safeParse(doc);
+if (!result.success) {
+  for (const issue of result.error.issues) {
+    console.error(`${issue.path.join(".") || "fichier"} : ${issue.message}`);
+  }
+  process.exit(1);
+}
+JS
+}
+
+apply_injected_agent_config() {
+  local cfg="$1"
+  local root="$2"
+  validate_agent_config "$CONFIG_SOURCE" "$root"
+  if [ -f "$cfg" ]; then
+    backup_file "$AGENT_STATE/backup" "$cfg" "agent-config.yaml"
+    say "L'ancienne configuration est copiée dans $AGENT_STATE/backup."
+  fi
+  install -d -m 0750 "$AGENT_ETC"
+  cp "$CONFIG_SOURCE" "$cfg"
+  chmod 0600 "$cfg"
+  CONFIG_CHANGED=1
+  say "Configuration injectée : $cfg"
+}
+
 install_agent() {
   install_apt
   install_node
@@ -1693,7 +1789,11 @@ install_agent() {
   build_tree "$AGENT_ROOT"
   local cfg
   cfg="$(agent_config_file)"
-  decide_agent_config "$cfg"
+  if [ -n "$CONFIG_SOURCE" ]; then
+    apply_injected_agent_config "$cfg" "$AGENT_ROOT"
+  else
+    decide_agent_config "$cfg"
+  fi
   install_agent_unit
   say "Configuration : $cfg"
   say "L'agent n'ouvre aucun port. Il joint le serveur indiqué dans sa configuration."
@@ -1886,6 +1986,7 @@ main() {
     usage
     exit 0
   fi
+  materialize_config
   need_root "$@"
   export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   hash -r || true

@@ -42,6 +42,8 @@ sudo bash /tmp/run-infractl.sh --mode agent --install \
 
 Agent Debian, VM ou machine physique : `--agent-type linux-node` et `--machine-type VM` ou `PHYSICAL`.
 
+Depuis la page Agents, le bouton Configuration donne ce fichier YAML, ou une commande qui télécharge `run-infractl.sh` et l'exécute avec la configuration injectée. `--config -` lit le YAML sur l'entrée standard et ignore le questionnaire. Une configuration déjà présente est copiée, puis remplacée. La machine doit pouvoir cloner le dépôt.
+
 Entretien :
 
 ```bash

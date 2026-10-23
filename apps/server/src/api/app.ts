@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
@@ -28,9 +31,10 @@ import {
 import { ERROR_CODES, JOB_STATUSES, MACHINE_STATUSES, MACHINE_TYPES } from "@infra/types";
 import { createAgentAuth, createApiAuth, requireAgentId } from "../auth/http.js";
 import { AgentAdmin } from "../agents/admin.js";
-import { createSessionService } from "../ui/session.js";
+import { endpointFromRequest, installScriptUrl, renderAgentConfig, renderAgentInstallCommand } from "../agents/config-file.js";
+import { decodeCredentialsKey, decryptSecret } from "../crypto/secrets.js";
 import { registerUi, uiDirectory } from "../ui/routes.js";
-import { decodeCredentialsKey } from "../crypto/secrets.js";
+import { createSessionService } from "../ui/session.js";
 import { AgentSettingsStore, agentRuntimeSchema } from "../config/agent-settings.js";
 import { applySettingsPatch, copySettings, publicSettings, settingsPatchSchema, writeServerConfig } from "../config/settings.js";
 import { formatConfigIssues } from "@infra/schemas";
@@ -53,6 +57,22 @@ import {
   withErrors,
 } from "./http-schemas.js";
 import { presentAgent, presentJob, presentLog, presentMachine, presentPage, proxmoxIdentity, iso } from "./present.js";
+
+async function findInstallScript(start: string): Promise<string | null> {
+  let dir = start;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const candidate = join(dir, "run-infractl.sh");
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return null;
+      dir = parent;
+    }
+  }
+  return null;
+}
 
 export type AppDeps = {
   config: ServerConfig;
@@ -341,6 +361,14 @@ export async function buildApp(deps: AppDeps): Promise<{
   const agentAuth = createAgentAuth(agentAuthDeps);
   const agentSettings = new AgentSettingsStore(deps.configPath ? join(dirname(deps.configPath), "agent-settings.json") : null);
 
+  app.get("/install/run-infractl.sh", async (_request, reply) => {
+    const file = await findInstallScript(dirname(fileURLToPath(import.meta.url)));
+    if (!file) {
+      return reply.code(404).send({ error: { code: ERROR_CODES.NOT_FOUND, message: "script d'installation introuvable" } });
+    }
+    return reply.type("text/x-shellscript; charset=utf-8").header("cache-control", "no-cache").send(createReadStream(file));
+  });
+
   app.get("/api/v1/health", { schema: { response: { 200: healthResponseSchema } } }, async () => {
     try {
       await deps.store.ping();
@@ -398,6 +426,50 @@ export async function buildApp(deps: AppDeps): Promise<{
     scope.post("/agents/:id/secret", { schema: { params: idParams, body: agentSecretBodySchema, response: withErrors(agentResponseSchema) } }, async (request) => {
       requireAdmin(request.principal);
       return presentAgent(await agents.rotateSecret(request.params.id, request.body));
+    });
+    scope.get("/agents/:id/config", {
+      schema: {
+        params: idParams,
+        response: {
+          200: z.object({ yaml: z.string(), warnings: z.array(z.string()), command: z.string() }).strict(),
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    }, async (request) => {
+      requireAdmin(request.principal);
+      const agent = await deps.store.findAgent(request.params.id);
+      if (!agent || (agent.type !== "linux-node" && agent.type !== "proxmox-node")) {
+        throw new AppError(404, ERROR_CODES.NOT_FOUND, "agent introuvable");
+      }
+      const ciphertext = await deps.store.findAgentSecret(agent.id);
+      if (!ciphertext) {
+        throw new AppError(404, ERROR_CODES.NOT_FOUND, "secret d'agent introuvable");
+      }
+      let secret: string;
+      try {
+        secret = decryptSecret(ciphertext, key);
+      } catch {
+        throw new AppError(500, "INTERNAL", "secret d'agent illisible");
+      }
+      const clusters = await deps.store.listClusters();
+      const runtime = agentSettings.get(agent.id);
+      const forwarded = request.headers["x-forwarded-proto"];
+      const endpoint = endpointFromRequest(
+        typeof request.headers.host === "string" ? request.headers.host : undefined,
+        request.protocol,
+        typeof forwarded === "string" ? forwarded : undefined,
+        deps.config.server.port,
+      );
+      const rendered = renderAgentConfig({
+        agent,
+        secret,
+        runtime,
+        clusterSlug: runtime?.proxmox?.clusterId ?? (clusters.length === 1 ? clusters[0]?.slug ?? null : null),
+        endpoint,
+      });
+      return { ...rendered, command: renderAgentInstallCommand(rendered.yaml, installScriptUrl(endpoint)) };
     });
     scope.delete("/agents/:id", { schema: { params: idParams, response: { 204: z.null(), 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema } } }, async (request, reply) => {
       requireAdmin(request.principal);

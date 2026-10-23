@@ -166,9 +166,9 @@ async function agents() {
     <td>${chip(agent.presence)}</td>
     <td>${escapeHtml(String(agent.maxConcurrency))}</td>
     <td class="muted">${escapeHtml((agent.capabilities ?? []).join(", "))}</td>
-    <td><button class="ghost" type="button" data-edit="${escapeHtml(agent.id)}">Régler</button></td>
+    <td><button class="ghost" type="button" data-agent-config="${escapeHtml(agent.id)}">Configuration</button> <button class="ghost" type="button" data-edit="${escapeHtml(agent.id)}">Régler</button></td>
   </tr>`).join("");
-  return pageHeading("Agents", "Enregistrés à la main ou depuis cette page. Le secret n'est jamais relu.", `<button class="primary" type="button" data-create-agent>Nouvel agent</button>`)
+  return pageHeading("Agents", "Le bouton Configuration donne le fichier YAML ou la commande d'installation.", `<button class="primary" type="button" data-create-agent>Nouvel agent</button>`)
     + table(["Nom", "Type", "Présence", "Concurrence", "Capacités", ""], rows || emptyRow(6));
 }
 
@@ -405,6 +405,12 @@ function showSecrets(items) {
   if (items.length === 0) return;
   const rows = items.map((item) => `<label class="field"><span>${escapeHtml(item.label)}</span><input readonly value="${escapeHtml(item.value)}" /></label>`).join("");
   openDialog("Secret à recopier", `<p>Cette valeur ne sera plus affichée.</p>${rows}<div class="actions"><button class="ghost" type="button" data-copy-secret>Copier</button><button class="primary" type="button" data-close>Fermer</button></div>`);
+}
+
+async function showAgentConfig(id) {
+  const result = await api(`/agents/${encodeURIComponent(id)}/config`);
+  const warnings = (result.warnings ?? []).map((warning) => `<p class="muted">${escapeHtml(warning)}</p>`).join("");
+  openDialog("Configuration de l'agent", `<p>Le fichier se dépose dans <code>/etc/infra-agent/config.yaml</code>. La commande télécharge <code>run-infractl.sh</code> depuis ce site et l'installe avec cette configuration. La machine doit pouvoir cloner le dépôt. Une configuration déjà présente est copiée, puis remplacée.</p>${warnings}<label class="field"><span>Fichier YAML</span><textarea class="config-file" data-config-part="yaml" readonly rows="12">${escapeHtml(result.yaml)}</textarea></label><div class="actions"><button class="ghost" type="button" data-copy-config="yaml">Copier le YAML</button><button class="ghost" type="button" data-download-config="yaml">Télécharger le YAML</button></div><label class="field"><span>Commande d'installation</span><textarea class="config-file" data-config-part="command" readonly rows="12">${escapeHtml(result.command)}</textarea></label><div class="actions"><button class="ghost" type="button" data-copy-config="command">Copier la commande</button><button class="ghost" type="button" data-download-config="command">Télécharger la commande</button><button class="primary" type="button" data-close>Fermer</button></div>`);
 }
 
 function valueAt(source, path) {
@@ -742,7 +748,7 @@ async function saveAgentSettings(form) {
   else toast("Agent mis à jour. L'exécution est prise au prochain contact.");
   const secretInput = form.elements.namedItem("identity.secret");
   if (secretInput instanceof HTMLInputElement) secretInput.value = "";
-  if (secret) showSecrets([{ label: "Secret de l'agent", value: secret }]);
+  if (secret) showAgentConfig(agentId);
 }
 
 function namedValue(form, name) {
@@ -890,6 +896,27 @@ document.addEventListener("click", (event) => {
   const target = event.target instanceof HTMLElement ? event.target : null;
   if (!target) return;
   if (target.dataset.createAgent !== undefined) openAgentDialog();
+  if (target.dataset.agentConfig) {
+    void showAgentConfig(target.dataset.agentConfig).catch((error) => toast(error instanceof Error ? error.message : "Configuration indisponible"));
+  }
+  if (target.dataset.copyConfig) {
+    const text = target.closest(".dialog")?.querySelector(`[data-config-part="${target.dataset.copyConfig}"]`)?.value ?? "";
+    const label = target.dataset.copyConfig === "command" ? "Commande copiée" : "Configuration copiée";
+    if (text && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text).then(() => toast(label)).catch(() => toast("Sélectionnez le texte pour le copier"));
+    }
+  }
+  if (target.dataset.downloadConfig === "yaml" || target.dataset.downloadConfig === "command") {
+    const kind = target.dataset.downloadConfig;
+    const text = target.closest(".dialog")?.querySelector(`[data-config-part="${kind}"]`)?.value ?? "";
+    const blob = new Blob([text.endsWith("\n") ? text : `${text}\n`], { type: kind === "command" ? "text/x-shellscript" : "application/yaml" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = kind === "command" ? "install-agent.sh" : "config.yaml";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
   if (target.dataset.edit) void openEditDialog(target.dataset.edit);
   if (target.dataset.apt === "apt.upgrade") openUpgradeDialog(target.dataset.aptMachine ?? "");
   if (target.dataset.apt === "apt.check") {
@@ -966,7 +993,7 @@ function openAgentDialog() {
     await api("/agents", { method: "POST", body: { id: data.id, name: data.name || data.id, type: data.type, secret: data.secret, maxConcurrency: Number(data.maxConcurrency || 4), capabilities: data.capabilities } });
     toast("Agent enregistré");
     closeDialog();
-    showSecrets([{ label: "Secret de l'agent", value: data.secret }]);
+    void showAgentConfig(data.id);
     void render();
   });
 }
@@ -979,14 +1006,14 @@ async function openEditDialog(id) {
     ${field("Concurrence", "maxConcurrency", "number", String(agent.maxConcurrency))}
     <div class="field"><label>Capacités</label><div class="checks">${CAPABILITIES.map((item) => `<label><input type="checkbox" name="capabilities" value="${item}" ${(agent.capabilities ?? []).includes(item) ? "checked" : ""}/> ${item}</label>`).join("")}</div></div>
     <div class="field"><label>Nouveau secret</label><span class="secret-line"><input name="secret" type="text" autocomplete="off" spellcheck="false" placeholder="Laisser vide pour le conserver" data-secret="16" data-secret-label="Secret de l'agent" /><button class="ghost" type="button" data-generate-secret>Générer</button></span></div>
-    <div class="actions"><button class="danger" type="button" data-delete-agent="${escapeHtml(agent.id)}">Retirer</button><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Enregistrer</button></div>
+    <div class="actions"><button class="danger" type="button" data-delete-agent="${escapeHtml(agent.id)}">Retirer</button><button class="ghost" type="button" data-agent-config="${escapeHtml(agent.id)}">Configuration</button><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Enregistrer</button></div>
   </form>`, async (form) => {
     const data = formData(form);
     await api(`/agents/${encodeURIComponent(id)}`, { method: "PATCH", body: { name: data.name, type: data.type, maxConcurrency: Number(data.maxConcurrency), capabilities: data.capabilities } });
     if (data.secret) await api(`/agents/${encodeURIComponent(id)}/secret`, { method: "POST", body: { secret: data.secret } });
     toast("Agent mis à jour");
     closeDialog();
-    if (data.secret) showSecrets([{ label: "Secret de l'agent", value: data.secret }]);
+    if (data.secret) void showAgentConfig(id);
     void render();
   });
 }

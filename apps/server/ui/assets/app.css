@@ -186,7 +186,14 @@ th[data-dir="desc"]::after { content: " ↓"; }
 .search { width: min(420px, 100%); margin: 0 0 14px; border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 10px 16px; }
 .text-button { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; color: inherit; cursor: pointer; }
 .text-button:hover { color: var(--green); }
-.dialog:has(table) { width: min(760px, 100%); }
+.dialog:has(table), .dialog:has(textarea) { width: min(760px, 100%); }
+.config-file {
+  min-height: 320px;
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
 td { padding: 12px 10px; border-top: 1px solid var(--line); vertical-align: middle; }
 tr { transition: background 180ms var(--ease); }
 tbody tr:hover { background: rgba(255, 255, 255, 0.45); }
