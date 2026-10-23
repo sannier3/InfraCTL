@@ -572,19 +572,34 @@ clone_repo() {
 update_repo() {
   local dest="$1"
   [ -d "$dest/.git" ] || die "Aucun dépôt dans $dest. Lancez d'abord --install."
-  say "Mise à jour du code. La configuration, les secrets et agent-settings.json ne sont pas modifiés."
-  local running tracked
+  say "Mise à jour du code. La configuration ignorée par git est conservée."
+  local running
   running="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || printf '%s' "$0")"
-  tracked="$dest/run-infractl.sh"
-  if [ -f "$tracked" ]; then
+  git -c "safe.directory=${dest}" -C "$dest" fetch origin "$BRANCH"
+  if ! git -c "safe.directory=${dest}" -C "$dest" merge-base --is-ancestor HEAD "origin/$BRANCH"; then
+    die "Le dépôt a des commits locaux absents de origin/$BRANCH. Aucun fichier n'a été écrasé."
+  fi
+  local path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      /*|..|../*|*/../*|*/..) die "Chemin git refusé : $path" ;;
+    esac
+    if [ -e "$dest/$path" ] && ! git -c "safe.directory=${dest}" -C "$dest" ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+      say "Retrait du fichier non suivi qui bloque la mise à jour : $path"
+      rm -rf -- "$dest/$path"
+    fi
+  done < <(git -c "safe.directory=${dest}" -C "$dest" diff --name-only --diff-filter=A HEAD "origin/$BRANCH")
+  say "Le code local est aligné sur origin/$BRANCH."
+  git -c "safe.directory=${dest}" -C "$dest" reset --hard "origin/$BRANCH"
+  if [ -f "$running" ]; then
     local tracked_real
-    tracked_real="$(readlink -f "$tracked" 2>/dev/null || printf '%s' "$tracked")"
+    tracked_real="$(readlink -f "$dest/run-infractl.sh" 2>/dev/null || printf '%s' "$dest/run-infractl.sh")"
     if [ "$running" != "$tracked_real" ]; then
-      git -c "safe.directory=${dest}" -C "$dest" checkout -- run-infractl.sh || true
+      cp -- "$running" "$dest/run-infractl.sh"
+      chmod 755 "$dest/run-infractl.sh" || true
     fi
   fi
-  git -c "safe.directory=${dest}" -C "$dest" fetch origin "$BRANCH"
-  git -c "safe.directory=${dest}" -C "$dest" pull --ff-only origin "$BRANCH"
 }
 
 build_tree() {
