@@ -21,6 +21,11 @@ export const APT_UPGRADE_ARGS = [
 
 export const APT_REFRESH_ARGS = ["update"] as const;
 
+export const DPKG_QUERY_EXECUTABLE = "dpkg-query";
+
+// Guillemets simples : ${Package} reste littéral. \\t et \\n sont les échappements lus par dpkg.
+export const DPKG_QUERY_ARGS = ["-W", "-f", '${Package}\\t${Version}\\n'] as const;
+
 export const APT_DIST_CHECK_ARGS = [
   "-s",
   "-y",

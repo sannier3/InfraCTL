@@ -129,6 +129,15 @@ const fleetPackageMachineSchema = z
   })
   .strict();
 
+const installedPackageSchema = z
+  .object({
+    name: z.string(),
+    machineCount: z.number().int(),
+    versions: z.array(z.string()),
+    machines: z.array(z.object({ id: z.string().min(1), version: z.string() }).strict()),
+  })
+  .strict();
+
 const fleetPackageSchema = z
   .object({
     name: z.string(),
@@ -496,6 +505,9 @@ export async function buildApp(deps: AppDeps): Promise<{
     scope.get("/updates", { schema: { response: withErrors(z.object({ data: z.array(fleetPackageSchema) }).strict()) } }, async () => {
       return { data: aggregatePackages(await deps.store.latestPackageHits()) };
     });
+    scope.get("/packages", { schema: { response: withErrors(z.object({ data: z.array(installedPackageSchema) }).strict()) } }, async () => {
+      return { data: aggregateInstalled(await deps.store.latestInstalledResults()) };
+    });
     scope.get("/machines", { schema: { querystring: machineQuery, response: withErrors(pageSchema(machineResponseSchema)) } }, async (request) => {
       const page = await deps.store.listMachines({
         page: request.query.page,
@@ -532,7 +544,17 @@ export async function buildApp(deps: AppDeps): Promise<{
         response: withErrors(machineResponseSchema),
       },
     }, async (request) => {
+      requireAdmin(request.principal);
       const machine = await inventory.linkVm(request.params.id, request.body.nodeId, request.body.vmid, now());
+      const [index, updates] = await Promise.all([
+        proxmoxCatalog(),
+        deps.store.latestUpdateCounts([machine.id]),
+      ]);
+      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), updates[0] ?? null);
+    });
+    scope.delete("/machines/:id/proxmox-link", { schema: { params: idParams, response: withErrors(machineResponseSchema) } }, async (request) => {
+      requireAdmin(request.principal);
+      const machine = await inventory.unlinkVm(request.params.id, now());
       const [index, updates] = await Promise.all([
         proxmoxCatalog(),
         deps.store.latestUpdateCounts([machine.id]),
@@ -624,6 +646,9 @@ export async function buildApp(deps: AppDeps): Promise<{
       const page = await jobs.logs(job.id, request.query.page, request.query.limit);
       return presentPage(page.items, page.total, request.query.page, request.query.limit, presentLog);
     });
+    scope.post("/actions/preview", { schema: { body: actionRequestSchema, response: { 200: z.any(), 401: errorResponseSchema, 422: errorResponseSchema } } }, async (request) => {
+      return jobs.preview(request.body);
+    });
     scope.post("/actions", { schema: { body: actionRequestSchema, response: withErrors(jobResponseSchema) } }, async (request) => {
       const principal = principalOf(request.principal);
       const job = await jobs.create(principal, request.body, now());
@@ -662,6 +687,9 @@ export async function buildApp(deps: AppDeps): Promise<{
     scope.post("/heartbeat", { schema: { body: heartbeatBodySchema, response: withErrors(z.object({ status: z.literal("ok"), settings: agentRuntimeSchema.optional() }).strict()) } }, async (request) => {
       const agentId = requireAgentId(request);
       await inventory.heartbeat(agentId, request.body, now());
+      if (request.body.aptConcurrency !== undefined) {
+        jobs.setAgentApt(agentId, request.body.aptConcurrency);
+      }
       const settings = agentSettings.get(agentId);
       return settings ? { status: "ok" as const, settings } : { status: "ok" as const };
     });
@@ -729,6 +757,49 @@ export async function buildApp(deps: AppDeps): Promise<{
   });
 
   return { app, jobs, inventory, scheduler, hub };
+}
+
+function aggregateInstalled(results: Array<{ machineId: string; result: unknown }>) {
+  const groups = new Map<string, { versions: Set<string>; machines: Map<string, string> }>();
+  for (const row of results) {
+    const packages = readInstalledPackages(row.result);
+    for (const pkg of packages) {
+      const group = groups.get(pkg.name) ?? { versions: new Set<string>(), machines: new Map<string, string>() };
+      group.versions.add(pkg.version);
+      group.machines.set(row.machineId, pkg.version);
+      groups.set(pkg.name, group);
+    }
+  }
+  return [...groups.entries()]
+    .map(([name, group]) => ({
+      name,
+      machineCount: group.machines.size,
+      versions: [...group.versions].sort((left, right) => left.localeCompare(right, "fr", { numeric: true })),
+      machines: [...group.machines.entries()].map(([id, version]) => ({ id, version })),
+    }))
+    .sort((left, right) => right.machineCount - left.machineCount || left.name.localeCompare(right.name, "fr"));
+}
+
+function readInstalledPackages(result: unknown): Array<{ name: string; version: string }> {
+  if (!result || typeof result !== "object" || !("packages" in result)) {
+    return [];
+  }
+  const packages = (result as { packages?: unknown }).packages;
+  if (!Array.isArray(packages)) {
+    return [];
+  }
+  const parsed: Array<{ name: string; version: string }> = [];
+  for (const item of packages) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const name = "name" in item && typeof item.name === "string" ? item.name : "";
+    const version = "version" in item && typeof item.version === "string" ? item.version : "";
+    if (name.length > 0 && version.length > 0) {
+      parsed.push({ name, version });
+    }
+  }
+  return parsed;
 }
 
 function aggregatePackages(hits: Array<{ machineId: string; name: string; currentVersion: string | null; newVersion: string | null; changeType: string; security: boolean }>) {

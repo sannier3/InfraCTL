@@ -6,6 +6,7 @@ coverage/
 .env.*
 !.env.example
 config.yaml
+agent-settings.json
 apps/server/config.yaml
 apps/agent/config.yaml
 apps/server/prisma/dev.db

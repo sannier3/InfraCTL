@@ -15,6 +15,7 @@ import type {
   MetricRecord,
   NonceRecord,
   PageQuery,
+  InstalledResult,
   PackageHit,
   ProxmoxNodeRecord,
   UpdateCount,
@@ -383,6 +384,20 @@ export class MemoryStore implements Store {
       }
     }
     return hits;
+  }
+
+  async latestInstalledResults(): Promise<InstalledResult[]> {
+    const latest = new Map<string, JobRecord>();
+    for (const job of this.jobs.values()) {
+      if (job.action !== "apt.packages" || job.status !== "SUCCESS" || !job.machineId || !job.finishedAt) {
+        continue;
+      }
+      const current = latest.get(job.machineId);
+      if (!current?.finishedAt || job.finishedAt.getTime() > current.finishedAt.getTime()) {
+        latest.set(job.machineId, job);
+      }
+    }
+    return [...latest.values()].flatMap((job) => (job.machineId ? [{ machineId: job.machineId, result: job.result }] : []));
   }
 
   async insertJob(job: JobRecord): Promise<void> {

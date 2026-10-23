@@ -3,7 +3,9 @@ import type { AgentJob } from "@infra/schemas";
 import { agentConfigSchema } from "@infra/schemas";
 import { FakeProcessRunner } from "../src/process/fake-runner.js";
 import { runRegisteredAction } from "../src/actions/registry.js";
+import { parseInstalledPackages } from "../src/actions/apt/installed.js";
 import { parseAptSimulation } from "../src/actions/apt/parse.js";
+import { DPKG_QUERY_ARGS, DPKG_QUERY_EXECUTABLE } from "../src/adapters/local-linux/apt.js";
 import { APT_CHECK_ARGS, APT_CHECK_EXECUTABLE, APT_UPGRADE_ARGS, APT_UPGRADE_EXECUTABLE } from "../src/adapters/local-linux/apt.js";
 import { cpuPercent, parseOsRelease, parseProcNetDev, parseProcStat } from "../src/adapters/local-linux/system.js";
 import type { SystemProbe } from "../src/adapters/local-linux/probe.js";
@@ -21,6 +23,71 @@ const proxmoxConfig = agentConfigSchema.parse({
   agent: { id: "pve-r730", type: "proxmox-node", secret: "change-me-please-now" },
   proxmox: { enabled: true, clusterId: "pve" },
   metrics: { source: "LOCAL_AGENT" },
+});
+
+describe("apt.packages", () => {
+  it("lit les paquets installés sans journaliser toute la liste", async () => {
+    const logs = [];
+    const runner = new FakeProcessRunner(async () => ({
+      exitCode: 0,
+      stdout: "bash\t5.2.15-2+b7\ncurl\t8.14.1-2\nignore\n",
+      stderr: "",
+      durationMs: 3,
+      timedOut: false,
+      signal: null,
+    }));
+    const outcome = await runRegisteredAction({
+      job: { ...job(), action: "apt.packages", category: "READ" },
+      runner,
+      probe: probe(),
+      config,
+      signal: new AbortController().signal,
+      log: (stream, data) => logs.push([stream, data]),
+    });
+    expect(runner.calls[0]).toMatchObject({ executable: DPKG_QUERY_EXECUTABLE, args: [...DPKG_QUERY_ARGS] });
+    expect(runner.calls[0]?.onChunk).toBeUndefined();
+    expect(outcome.status).toBe("SUCCESS");
+    expect(outcome.result).toEqual({
+      packageCount: 2,
+      packages: [
+        { name: "bash", version: "5.2.15-2+b7" },
+        { name: "curl", version: "8.14.1-2" },
+      ],
+    });
+    expect(logs).toEqual([["system", "2 paquets installés"]]);
+    expect(parseInstalledPackages("Bad Name\t1\n")).toEqual([]);
+  });
+
+  it("interroge un LXC via pct exec", async () => {
+    const runner = new FakeProcessRunner(async (request) => ({
+      exitCode: 0,
+      stdout: request.args[0] === "status" ? "status: running\n" : "nginx\t1.22.1-9\n",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+      signal: null,
+    }));
+    const outcome = await runRegisteredAction({
+      job: {
+        ...job(),
+        action: "apt.packages",
+        category: "READ",
+        target: {
+          ...job().target,
+          machineType: "LXC",
+          guest: { vmid: 101, guestType: "LXC", clusterId: "5f0b6b0a-2a7e-4c1d-9c2a-1b0d5e6f7a8d" },
+        },
+      },
+      runner,
+      probe: probe(),
+      config: proxmoxConfig,
+      signal: new AbortController().signal,
+      log: () => undefined,
+    });
+    expect(outcome.status).toBe("SUCCESS");
+    expect(runner.calls[1]?.args.slice(0, 4)).toEqual(["exec", "101", "--", "dpkg-query"]);
+    expect(outcome.result).toMatchObject({ packageCount: 1, packages: [{ name: "nginx", version: "1.22.1-9" }] });
+  });
 });
 
 describe("apt.check", () => {

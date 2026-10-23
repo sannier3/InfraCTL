@@ -3,6 +3,8 @@ import type { AgentConfig, AgentJob } from "@infra/schemas";
 import {
   APT_CHECK_ARGS,
   APT_CHECK_EXECUTABLE,
+  DPKG_QUERY_ARGS,
+  DPKG_QUERY_EXECUTABLE,
   APT_DIST_CHECK_ARGS,
   APT_DIST_UPGRADE_ARGS,
   APT_REFRESH_ARGS,
@@ -14,6 +16,7 @@ import type { ProcessResult, ProcessRunner } from "../process/types.js";
 import type { SystemProbe } from "../adapters/local-linux/probe.js";
 import { collectProxmoxInventory } from "../proxmox/collect.js";
 import { lxcIndexArgs, parsePveVersion } from "../proxmox/parse.js";
+import { parseInstalledPackages } from "./apt/installed.js";
 import { parseAptSimulation } from "./apt/parse.js";
 import { lineArg, placeCommand, resolvePlace, unitArg, type Place } from "./target.js";
 import type { ServerClient } from "../transport/client.js";
@@ -64,6 +67,7 @@ const HANDLERS: Record<ActionName, ActionHandler> = {
   "system.shutdown": (context) => runFixed(context, "systemctl", ["poweroff"], "system.shutdown"),
   "apt.refresh": (context) => runFixed(context, APT_CHECK_EXECUTABLE, [...APT_REFRESH_ARGS], "apt.refresh"),
   "apt.check": aptCheck,
+  "apt.packages": aptPackages,
   "apt.upgrade": aptUpgrade,
   "systemd.failed": (context) =>
     runFixed(context, "systemctl", ["--failed", "--no-legend", "--plain", "--no-pager"], "systemd.failed", true),
@@ -158,6 +162,41 @@ async function rebootRequired(context: ActionContext): Promise<ActionOutcome> {
     executable: command.executable,
     args: command.args,
     result: { rebootRequired: run.result.exitCode === 0 },
+  };
+}
+
+async function aptPackages(context: ActionContext): Promise<ActionOutcome> {
+  const opened = await openPlace(context);
+  if (isOutcome(opened)) {
+    return opened;
+  }
+  const command = placeCommand(opened.place, DPKG_QUERY_EXECUTABLE, [...DPKG_QUERY_ARGS]);
+  const result = await context.runner.run({
+    executable: command.executable,
+    args: command.args,
+    timeoutMs: getAction("apt.packages").timeoutMs,
+    env: SAFE_PROCESS_ENV,
+    allowSigkill: true,
+    sigkillAfterMs: 5_000,
+    signal: context.signal,
+  });
+  if (context.signal.aborted) {
+    return { status: "INTERRUPTED", exitCode: result.exitCode, errorCode: "AGENT_SHUTDOWN", errorMessage: "agent arrêté pendant apt.packages", executable: command.executable, args: command.args };
+  }
+  if (result.timedOut) {
+    return { status: "INTERRUPTED", exitCode: result.exitCode, errorCode: "TIMEOUT", errorMessage: "apt.packages a dépassé son délai", executable: command.executable, args: command.args };
+  }
+  if (result.exitCode !== 0) {
+    return { status: "FAILED", exitCode: result.exitCode, errorCode: "PROCESS_FAILED", errorMessage: result.stderr.trim().slice(0, 500) || "dpkg-query a échoué", executable: command.executable, args: command.args };
+  }
+  const packages = parseInstalledPackages(result.stdout);
+  context.log("system", `${packages.length} paquets installés`);
+  return {
+    status: "SUCCESS",
+    exitCode: 0,
+    executable: command.executable,
+    args: command.args,
+    result: { packageCount: packages.length, packages },
   };
 }
 

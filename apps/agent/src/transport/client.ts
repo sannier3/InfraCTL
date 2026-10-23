@@ -24,6 +24,7 @@ export class ServerClient {
     queued: number;
     capacity: number;
     capabilities: Capability[];
+    aptConcurrency: number;
   }): Promise<unknown> {
     const response = await this.send("POST", "/api/v1/agent/heartbeat", {
       agentId: this.config.agent.id,
@@ -31,6 +32,7 @@ export class ServerClient {
       type: this.config.agent.type,
       jobs: { running: input.running, queued: input.queued, capacity: input.capacity },
       capabilities: input.capabilities,
+      aptConcurrency: input.aptConcurrency,
     });
     return response.body;
   }

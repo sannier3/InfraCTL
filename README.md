@@ -4,6 +4,64 @@ Moteur de supervision légère et de maintenance contrôlée pour des nœuds Pro
 
 Le serveur demande une **action nommée**. L'agent décide comment l'exécuter. Le serveur ne transmet jamais une commande shell.
 
+## Mise en place
+
+Un seul script, `run-infractl.sh`, installe les paquets (`curl`, `wget`, `git`, `openssl`, `sudo`), Node.js 20 ou plus récent, pnpm, clone le dépôt et gère le service systemd. La configuration est écrite dans `/etc`, en dehors du dépôt. `--update` récupère le code, reconstruit et applique les migrations. Il ne réécrit pas `config.yaml`, la clé de chiffrement, les secrets des agents, `agent-settings.json`, ni une unité systemd déjà présente.
+
+```bash
+curl -fsSL "https://git.jbsan.fr/JBSAN-INFORMATIQUE/InfraCTL/raw/branch/main/run-infractl.sh" -o /tmp/run-infractl.sh
+sudo bash /tmp/run-infractl.sh --help
+```
+
+Le dépôt est privé : sans jeton, ce téléchargement est refusé. Depuis une copie déjà clonée, le même fichier est `run-infractl.sh` à la racine.
+
+Serveur, avec un MariaDB déjà en place. Les caractères spéciaux du mot de passe doivent être encodés dans l'URL (`%40` pour `@`) :
+
+```bash
+sudo bash /tmp/run-infractl.sh --mode server --install --database existing \
+  --db-url 'mysql://infra:MOT_DE_PASSE@10.0.0.17:3306/infra_manager'
+```
+
+Serveur, avec une nouvelle instance MariaDB dans Docker, accessible seulement depuis cette machine :
+
+```bash
+sudo bash /tmp/run-infractl.sh --mode server --install --database docker
+```
+
+Le mot de passe de l'interface et le jeton d'administration sont affichés une seule fois, à la création de la configuration.
+
+Agent sur un nœud Proxmox :
+
+```bash
+sudo bash /tmp/run-infractl.sh --mode agent --install \
+  --server-host 10.0.0.10 --server-port 8080 \
+  --agent-id pve-01 --agent-type proxmox-node \
+  --agent-secret 'SECRET_ENREGISTRE_SUR_LE_SERVEUR' \
+  --cluster-id pve
+```
+
+Agent Debian, VM ou machine physique : `--agent-type linux-node` et `--machine-type VM` ou `PHYSICAL`.
+
+Entretien :
+
+```bash
+sudo bash /tmp/run-infractl.sh --mode server --configure
+sudo bash /tmp/run-infractl.sh --mode server --configure --fresh
+sudo bash /tmp/run-infractl.sh --mode agent --configure
+sudo bash /tmp/run-infractl.sh --mode server --change-password
+sudo bash /tmp/run-infractl.sh --mode server --ui enable
+sudo bash /tmp/run-infractl.sh --mode server --ui disable
+sudo bash /tmp/run-infractl.sh --mode server --service restart
+sudo bash /tmp/run-infractl.sh --mode server --status
+sudo bash /tmp/run-infractl.sh --mode agent --update
+sudo bash /tmp/run-infractl.sh --mode server --uninstall
+sudo bash /tmp/run-infractl.sh --mode server --uninstall --purge --yes
+```
+
+`--configure` conserve la configuration actuelle, puis demande chaque réglage. Entrée garde la valeur affichée. On peut aussi écrire une configuration neuve. `--fresh` force cette configuration neuve, après une copie de l'ancienne. Une base déjà remplie avec une autre clé de chiffrement ne pourra plus relire les secrets des agents. `--uninstall` arrête le service et retire le code. La configuration reste, avec une copie dans `/var/lib/infra-manager/backup` ou `/var/lib/infra-agent/backup`. `--purge` retire aussi cette configuration locale. Une base MariaDB distante n'est jamais supprimée. L'instance Docker créée par le script n'est effacée qu'avec `--purge`. `--change-password` et `--ui` concernent le serveur.
+
+Le démarrage de développement, plus bas, reste séparé : `pnpm install`, `docker compose up -d`, puis `pnpm dev`. Ce fichier Compose de développement n'est pas celui de l'installation serveur.
+
 ## Ce que cette version fait
 
 - monorepo pnpm, serveur Fastify, agent `linux-node`
@@ -149,12 +207,13 @@ Installation cible :
 /etc/systemd/system/infra-agent.service
 ```
 
-Sur la machine Debian, après un build :
+Sur la machine :
 
 ```bash
-sudo sh apps/agent/deploy/install.sh
-sudo systemctl enable --now infra-agent
+sudo bash run-infractl.sh --mode agent --install
 ```
+
+La procédure complète, serveur compris, est dans [Mise en place](#mise-en-place).
 
 L'agent ouvre une connexion sortante vers `protocol://host:port`. Il ne publie aucun port. En cas de coupure il reprend avec un délai de 1 s, 2 s, 5 s, 10 s puis 30 s, plus un jitter de 20 %.
 

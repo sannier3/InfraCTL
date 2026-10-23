@@ -46,6 +46,10 @@ export class InventoryService {
     return this.lock.run(() => this.linkVmUnlocked(machineId, nodeId, vmid, now));
   }
 
+  unlinkVm(machineId: string, now: Date): Promise<MachineRecord> {
+    return this.lock.run(() => this.unlinkVmUnlocked(machineId, now));
+  }
+
   async refreshUnlocked(now: Date): Promise<void> {
     const agents = await this.store.listAgents();
     for (const agent of agents) {
@@ -140,6 +144,25 @@ export class InventoryService {
       vmid,
       guestType: "QEMU",
     });
+    return (await this.store.findMachine(machine.id)) ?? machine;
+  }
+
+  private async unlinkVmUnlocked(machineId: string, now: Date): Promise<MachineRecord> {
+    const machine = await this.store.findMachine(machineId);
+    if (!machine) {
+      throw new AppError(404, ERROR_CODES.NOT_FOUND, "machine introuvable");
+    }
+    if (machine.type !== "VM") {
+      throw new AppError(422, ERROR_CODES.INCOMPATIBLE_TARGET, "seule une VM est liée à un VMID Proxmox");
+    }
+    const own = await this.store.findLinkByMachine(machine.id);
+    if (!own) {
+      throw new AppError(404, ERROR_CODES.NOT_FOUND, "cette VM n'est pas liée à un VMID");
+    }
+    await this.store.deleteLink(machine.id);
+    if (!machine.agentId) {
+      await this.store.updateMachine(machine.id, { status: "STOPPED", hiddenAt: now, lastStateChangeAt: now });
+    }
     return (await this.store.findMachine(machine.id)) ?? machine;
   }
 

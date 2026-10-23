@@ -217,6 +217,8 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.45); }
 .stack { display: grid; gap: 14px; }
 .field { display: grid; gap: 6px; }
 .field label { font-size: 13px; color: var(--muted); }
+.secret-line { display: flex; gap: 8px; align-items: center; }
+.secret-line input { flex: 1; min-width: 0; }
 .checks { display: flex; flex-wrap: wrap; gap: 8px; }
 .checks label { display: flex; gap: 6px; align-items: center; font-size: 13px; padding: 6px 8px; border-radius: 999px; background: rgba(255,255,255,0.55); }
 .dialog-back {

@@ -1,7 +1,7 @@
 [Unit]
 Description=Serveur Infra Manager
 Documentation=file:/opt/infra-manager/README.md
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
 StartLimitIntervalSec=60
 StartLimitBurst=5
@@ -12,7 +12,7 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/opt/infra-manager
-Environment=CONFIG_PATH=/opt/infra-manager/config.yaml
+Environment=CONFIG_PATH=/etc/infra-manager/config.yaml
 Environment=NODE_ENV=production
 ExecStart=/usr/bin/node /opt/infra-manager/apps/server/dist/index.js
 Restart=on-failure

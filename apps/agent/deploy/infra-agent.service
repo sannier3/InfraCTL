@@ -13,7 +13,7 @@ Group=root
 WorkingDirectory=/opt/infra-agent
 Environment=CONFIG_PATH=/etc/infra-agent/config.yaml
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node /opt/infra-agent/dist/index.js
+ExecStart=/usr/bin/node /opt/infra-agent/apps/agent/dist/index.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

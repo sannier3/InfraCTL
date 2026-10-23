@@ -270,6 +270,43 @@ describe("API et scheduler", () => {
     expect(onA).toEqual({ decision: "assign", agentId: "pve01" });
     expect(onB).toEqual({ decision: "assign", agentId: "pve02" });
   });
+
+  it("laisse les mises à jour APT suivre le budget APT annoncé par l'agent", () => {
+    const clusterId = randomUUID();
+    const nodeId = randomUUID();
+    const guests = ["g1", "g2", "g3"];
+    const machines = [
+      { id: nodeId, type: "PROXMOX_NODE" as const, status: "RUNNING" as const, agentId: "pve01" },
+      ...guests.map((id) => ({ id, type: "LXC" as const, status: "RUNNING" as const, agentId: null })),
+    ];
+    const links = guests.map((id, index) => ({ machineId: id, clusterId, currentNodeId: nodeId, vmid: 200 + index }));
+    const running = guests.slice(0, 2).map((id) => job({
+      id: `job-${id}`,
+      machineId: id,
+      action: "apt.upgrade",
+      category: "WRITE",
+      status: "RUNNING",
+      agentId: "pve01",
+    }));
+    const limits = { ...testConfig().concurrency, perAgent: 4, perProxmoxNode: 4, aptPerProxmoxNode: 2 };
+    const third = machines[3];
+    if (!third) throw new Error("machine absente");
+    const base = {
+      action: ACTION_CATALOG["apt.upgrade"],
+      agents: [{ id: "pve01", presence: "ONLINE" as const, maxConcurrency: 7, capabilities: ["apt", "lxc.exec"] }],
+      machines,
+      nodes: [{ id: nodeId, clusterId, name: "pve", machineId: nodeId, agentId: "pve01", machineStatus: "RUNNING" as const }],
+      links,
+      jobs: running,
+      limits,
+    };
+    expect(evaluateAdmission({ ...base, machine: third }).decision).toBe("wait");
+    expect(evaluateAdmission({
+      ...base,
+      agents: [{ id: "pve01", presence: "ONLINE", maxConcurrency: 7, capabilities: ["apt", "lxc.exec"], aptConcurrency: 7 }],
+      machine: third,
+    })).toEqual({ decision: "assign", agentId: "pve01" });
+  });
 });
 
 async function inventory(store: MemoryStore): Promise<void> {

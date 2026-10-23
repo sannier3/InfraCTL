@@ -109,6 +109,11 @@ export type UpdatePackageRecord = {
   security: boolean;
 };
 
+export type InstalledResult = {
+  machineId: string;
+  result: unknown;
+};
+
 export type PackageHit = {
   machineId: string;
   name: string;

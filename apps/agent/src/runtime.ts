@@ -245,6 +245,7 @@ function heartbeatPayload(config: AgentConfig, state: { running: number }) {
     running: state.running,
     queued: 0,
     capacity: config.concurrency.total,
+    aptConcurrency: config.concurrency.apt,
     capabilities,
   };
 }

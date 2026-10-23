@@ -97,6 +97,7 @@ export const actionRequestSchema = z
     action: actionNameSchema,
     requestedBy: z.string().trim().min(1).max(128).optional(),
     selector: selectorSchema,
+    acknowledgeBlockers: z.boolean().optional(),
     parameters: z
       .object({
         unit: systemdUnitSchema.optional(),
@@ -129,6 +130,7 @@ export const heartbeatBodySchema = z
       })
       .strict(),
     capabilities: z.array(capabilitySchema).max(32),
+    aptConcurrency: z.number().int().min(1).max(10_000).optional(),
   })
   .strict();
 export type HeartbeatBody = z.infer<typeof heartbeatBodySchema>;

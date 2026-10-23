@@ -25,6 +25,7 @@ export type WorldAgent = {
   presence: AgentPresence;
   maxConcurrency: number;
   capabilities: readonly string[];
+  aptConcurrency?: number;
 };
 
 export type WorldMachine = {
@@ -116,7 +117,10 @@ export function evaluateAdmission(input: {
   if (active.length >= input.limits.global) {
     return { decision: "wait" };
   }
-  const perAgent = Math.min(input.limits.perAgent, agent.maxConcurrency);
+  const aptBudget = Math.max(input.limits.aptPerProxmoxNode, agent.aptConcurrency ?? 0);
+  const perAgent = input.action.countsAsApt
+    ? Math.min(agent.maxConcurrency, aptBudget)
+    : Math.min(input.limits.perAgent, agent.maxConcurrency);
   if (active.filter((job) => job.agentId === agent.id).length >= perAgent) {
     return { decision: "wait" };
   }
@@ -133,14 +137,13 @@ export function evaluateAdmission(input: {
   const nodeId = route.proxmoxNodeId;
   if (nodeId) {
     const onNode = active.filter((job) => executionNodeId(job, input.machines, input.nodes, input.links) === nodeId);
-    if (onNode.length >= input.limits.perProxmoxNode) {
-      return { decision: "wait" };
-    }
     if (input.action.countsAsApt) {
       const aptOnNode = onNode.filter((job) => safeAction(job.action)?.countsAsApt === true);
-      if (aptOnNode.length >= input.limits.aptPerProxmoxNode) {
+      if (aptOnNode.length >= aptBudget) {
         return { decision: "wait" };
       }
+    } else if (onNode.length >= input.limits.perProxmoxNode) {
+      return { decision: "wait" };
     }
   }
 

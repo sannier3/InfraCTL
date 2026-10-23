@@ -34,8 +34,18 @@ export class JobService {
     private readonly deadlineGraceMs: number,
   ) {}
 
+  private readonly aptConcurrency = new Map<string, number>();
+
   setDispatchLeaseMs(ms: number): void {
     this.dispatchLeaseMs = ms;
+  }
+
+  setAgentApt(agentId: string, aptConcurrency: number): void {
+    this.aptConcurrency.set(agentId, aptConcurrency);
+  }
+
+  preview(request: ActionRequest): Promise<{ machines: Array<{ id: string; displayName: string; type: string; blockers: Array<{ id: string; action: string; status: JobStatus; errorMessage: string | null; createdAt: string }> }> }> {
+    return this.run(() => this.previewUnlocked(request));
   }
 
   run<T>(operation: () => Promise<T>): Promise<T> {
@@ -292,6 +302,9 @@ export class JobService {
     if (compatible.length === 0) {
       throw new AppError(422, ERROR_CODES.NO_TARGETS, "aucune cible compatible");
     }
+    if (request.acknowledgeBlockers && action.mutating) {
+      await this.acknowledgeBlockers(compatible.map((machine) => machine.id), now);
+    }
     const links = await this.store.listLinks();
     const makeLeaf = async (machine: MachineRecord, parentId: string | null): Promise<JobRecord> => {
       const link = links.find((item) => item.machineId === machine.id) ?? null;
@@ -373,6 +386,57 @@ export class JobService {
       await makeLeaf(machine, parent.id);
     }
     return parent;
+  }
+
+  private async previewUnlocked(request: ActionRequest): Promise<{ machines: Array<{ id: string; displayName: string; type: string; blockers: Array<{ id: string; action: string; status: JobStatus; errorMessage: string | null; createdAt: string }> }> }> {
+    const action = getAction(request.action);
+    if (!action.enabled || !action.mutating) {
+      return { machines: [] };
+    }
+    const selected = await this.selectMachines(request);
+    const compatible = selected.filter((machine) => action.supportedTargets.includes(machine.type));
+    const blockers = await this.blockingJobs(compatible.map((machine) => machine.id));
+    const machines = compatible.flatMap((machine) => {
+      const own = blockers.filter((job) => job.machineId === machine.id);
+      if (own.length === 0) {
+        return [];
+      }
+      return [{
+        id: machine.id,
+        displayName: machine.displayName,
+        type: machine.type,
+        blockers: own.map((job) => ({
+          id: job.id,
+          action: job.action,
+          status: job.status,
+          errorMessage: job.errorMessage,
+          createdAt: job.createdAt.toISOString(),
+        })),
+      }];
+    });
+    return { machines };
+  }
+
+  private async acknowledgeBlockers(machineIds: string[], now: Date): Promise<void> {
+    const blockers = await this.blockingJobs(machineIds);
+    for (const blocker of blockers) {
+      await this.store.compareAndSetJob(blocker.id, blocker.status, { acknowledgedAt: now });
+    }
+  }
+
+  private async blockingJobs(machineIds: string[]): Promise<JobRecord[]> {
+    const ids = new Set(machineIds);
+    const jobs = await this.store.listJobsByStatuses(["UNKNOWN", "INTERRUPTED", "REQUIRES_CONFIRMATION"]);
+    return jobs.filter((job) => {
+      if (!job.machineId || !ids.has(job.machineId) || job.acknowledgedAt) {
+        return false;
+      }
+      if (!isCatalogAction(job.action)) {
+        return false;
+      }
+      const definition = getAction(job.action);
+      return definition.mutating && definition.neverAutoRetry;
+    });
   }
 
   private async selectMachines(request: ActionRequest): Promise<MachineRecord[]> {
@@ -776,7 +840,10 @@ export class JobService {
       this.store.listLinks(),
     ]);
     return {
-      agents,
+      agents: agents.map((agent) => {
+        const aptConcurrency = this.aptConcurrency.get(agent.id);
+        return aptConcurrency === undefined ? agent : { ...agent, aptConcurrency };
+      }),
       machines,
       links,
       nodes: nodes.map((node) => ({

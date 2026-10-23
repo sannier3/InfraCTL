@@ -8,6 +8,7 @@ const NAV = [
   ["/agents", "Agents"],
   ["/machines", "Machines"],
   ["/updates", "Mises à jour"],
+  ["/packages", "Paquets"],
   ["/jobs", "Travaux"],
   ["/clusters", "Clusters"],
   ["/alerts", "Alertes"],
@@ -41,20 +42,21 @@ const SHARED_TARGETS = ["PROXMOX_NODE", "LXC", "VM", "PHYSICAL"];
 const ACTIONS = [
   { name: "system.info", label: "État du système", targets: SHARED_TARGETS },
   { name: "system.rebootRequired", label: "Redémarrage requis", targets: SHARED_TARGETS },
-  { name: "system.reboot", label: "Redémarrer", targets: SHARED_TARGETS },
-  { name: "system.shutdown", label: "Arrêter", targets: SHARED_TARGETS },
-  { name: "apt.refresh", label: "Rafraîchir APT", targets: SHARED_TARGETS },
+  { name: "system.reboot", label: "Redémarrer", targets: SHARED_TARGETS, mutating: true },
+  { name: "system.shutdown", label: "Arrêter", targets: SHARED_TARGETS, mutating: true },
+  { name: "apt.refresh", label: "Rafraîchir APT", targets: SHARED_TARGETS, mutating: true },
   { name: "apt.check", label: "Voir les mises à jour", targets: SHARED_TARGETS },
-  { name: "apt.upgrade", label: "Mettre à jour", targets: SHARED_TARGETS },
+  { name: "apt.packages", label: "Paquets installés", targets: SHARED_TARGETS },
+  { name: "apt.upgrade", label: "Mettre à jour", targets: SHARED_TARGETS, mutating: true },
   { name: "systemd.failed", label: "Unités en échec", targets: SHARED_TARGETS },
   { name: "systemd.serviceStatus", label: "État d'une unité", targets: SHARED_TARGETS, unit: true },
-  { name: "systemd.restart", label: "Redémarrer une unité", targets: SHARED_TARGETS, unit: true },
+  { name: "systemd.restart", label: "Redémarrer une unité", targets: SHARED_TARGETS, unit: true, mutating: true },
   { name: "journal.system", label: "Journal système", targets: SHARED_TARGETS, lines: true },
   { name: "journal.service", label: "Journal d'une unité", targets: SHARED_TARGETS, unit: true, lines: true },
   { name: "proxmox.nodeInfo", label: "État du nœud", targets: ["PROXMOX_NODE"] },
   { name: "proxmox.inventory", label: "Inventaire Proxmox", targets: ["PROXMOX_NODE"] },
   { name: "proxmox.resources", label: "Ressources du cluster", targets: ["PROXMOX_NODE"] },
-  { name: "proxmox.host.update", label: "Mise à jour de l'hôte", targets: ["PROXMOX_NODE"] },
+  { name: "proxmox.host.update", label: "Mise à jour de l'hôte", targets: ["PROXMOX_NODE"], mutating: true },
   { name: "lxc.info", label: "Fiche LXC", targets: ["LXC"] },
   { name: "lxc.resources", label: "Ressources LXC", targets: ["LXC"] },
 ];
@@ -67,6 +69,7 @@ const TYPE_LABEL = {
 };
 let directory = { machines: [], nodes: [], clusters: [] };
 let packageIndex = [];
+let installedIndex = [];
 
 window.addEventListener("popstate", () => { void render(); });
 document.addEventListener("click", (event) => {
@@ -122,6 +125,7 @@ async function match(path) {
   if (path === "/agents") return agents();
   if (path === "/machines") return machines();
   if (path === "/updates") return updates();
+  if (path === "/packages") return installedPackages();
   const machine = path.match(/^\/machines\/([^/]+)$/);
   if (machine) return machineDetail(decodeURIComponent(machine[1] ?? ""));
   if (path === "/jobs") return jobs();
@@ -196,6 +200,33 @@ async function updates() {
     + searchable("updates", "Nom du paquet…", table(["Paquet", "Machines", "Nouvelle version", "Sécurité", "Changement"], rows || emptyRow(5), { list: "updates", sort: { index: 1, dir: "desc" } }));
 }
 
+async function installedPackages() {
+  installedIndex = await installedCatalog();
+  const rows = installedIndex.map((item, index) => `<tr>
+    <td><button class="text-button" type="button" data-installed="${index}">${escapeHtml(item.name)}</button></td>
+    <td>${escapeHtml(String(item.machineCount))}</td>
+    <td>${escapeHtml(versionList(item.versions))}</td>
+  </tr>`).join("");
+  return pageHeading("Paquets", "Paquets installés relevés sur chaque machine. Un clic montre les machines et la version installée.", `<button class="primary" type="button" data-collect-packages>Relever les paquets</button>`)
+    + searchable("packages", "Nom du paquet…", table(["Paquet", "Machines", "Versions"], rows || emptyRow(3), { list: "packages", sort: { index: 1, dir: "desc" } }));
+}
+
+function versionList(versions) {
+  if (!versions || versions.length === 0) return "—";
+  if (versions.length <= 3) return versions.join(", ");
+  return `${versions.length} versions`;
+}
+
+async function installedCatalog() {
+  try {
+    const page = await api("/packages");
+    return page.data ?? [];
+  } catch (error) {
+    if (!(error instanceof Error) || error.status !== 404) throw error;
+    return [];
+  }
+}
+
 async function machineDetail(id) {
   const [machine, resources, updates, jobsPage] = await Promise.all([
     api(`/machines/${encodeURIComponent(id)}`),
@@ -209,8 +240,9 @@ async function machineDetail(id) {
   const snapshot = updates.data?.[0];
   const packages = (snapshot?.packages ?? []).map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.currentVersion ?? "—")}</td><td>${escapeHtml(item.newVersion ?? "—")}</td><td>${escapeHtml(item.changeType)}</td></tr>`).join("");
   const machineId = escapeHtml(machine.id);
-  const link = machine.type === "VM" ? `<button class="ghost" type="button" data-link-proxmox="${machineId}">Lier au Proxmox</button>` : "";
-  const buttons = `${link}<button class="ghost" type="button" data-apt="apt.check" data-apt-machine="${machineId}">Rechercher les mises à jour</button><button class="ghost" type="button" data-view-updates="${machineId}">Voir les mises à jour</button><button class="primary" type="button" data-apt="apt.upgrade" data-apt-machine="${machineId}">Mettre à jour</button><button class="ghost" type="button" data-action data-machine="${machineId}" data-type="${escapeHtml(machine.type)}">Lancer une action</button>`;
+  const link = machine.type === "VM" ? `<button class="ghost" type="button" data-link-proxmox="${machineId}">${machine.proxmox?.vmid ? "Changer le lien Proxmox" : "Lier au Proxmox"}</button>` : "";
+  const unlink = machine.type === "VM" && machine.proxmox?.vmid ? `<button class="ghost" type="button" data-unlink-proxmox="${machineId}">Délier</button>` : "";
+  const buttons = `${link}${unlink}<button class="ghost" type="button" data-apt="apt.check" data-apt-machine="${machineId}">Rechercher les mises à jour</button><button class="ghost" type="button" data-view-updates="${machineId}">Voir les mises à jour</button><button class="primary" type="button" data-apt="apt.upgrade" data-apt-machine="${machineId}">Mettre à jour</button><button class="ghost" type="button" data-action data-machine="${machineId}" data-type="${escapeHtml(machine.type)}">Lancer une action</button>`;
   const scope = machine.type === "PROXMOX_NODE" ? `<label class="scope"><input id="guest-scope" type="checkbox" /><span class="switch" aria-hidden="true"></span><span><strong>Tous les invités</strong><small>Les boutons agissent aussi sur chaque LXC et chaque VM de ce nœud.</small></span></label>` : "";
   const disk = current?.diskTotal ? `${bytes(current.diskUsed)} / ${bytes(current.diskTotal)}` : "—";
   return pageHeading(machine.displayName, identityLine(machine), buttons)
@@ -292,11 +324,11 @@ const SETTING_GROUPS = [
   { id: "metrics", title: "Métriques", note: "Appliqué immédiatement.", fields: [
     ["metrics.retentionDays", "Conservation", "number", "jours"],
   ]},
-  { id: "concurrency", title: "Concurrence", note: "Appliqué immédiatement aux prochains travaux.", fields: [
+  { id: "concurrency", title: "Concurrence", note: "Appliqué immédiatement. Pour les mises à jour APT d'un nœud, le serveur retient le plus élevé entre ce plafond et la concurrence APT annoncée par l'agent, sans dépasser la file d'attente de cet agent.", fields: [
     ["concurrency.global", "Travaux simultanés", "number"],
     ["concurrency.perAgent", "Par agent", "number"],
     ["concurrency.perProxmoxNode", "Par nœud Proxmox", "number"],
-    ["concurrency.aptPerProxmoxNode", "Mises à jour APT par nœud", "number"],
+    ["concurrency.aptPerProxmoxNode", "Mises à jour APT par nœud", "number", "Les LXC d'un nœud partagent ce budget avec l'hôte"],
     ["concurrency.perMachineWrite", "Écriture par machine", "number"],
     ["concurrency.proxmoxHostMaintenancePerCluster", "Maintenance d'hôte par cluster", "number"],
   ]},
@@ -321,7 +353,7 @@ async function settingsPage() {
   const options = (agentsPage.data ?? []).map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}</option>`).join("");
   const agent = `<form class="panel" data-settings="agent"><h2>Agent</h2><p class="muted">Identité, secret, capacités et exécution. L'exécution part à l'agent à son prochain contact. Le nouveau secret doit être recopié dans son fichier.</p><div class="field"><label>Agent</label><select id="settings-agent" name="agentId"><option value="">Choisir</option>${options}</select></div><div id="agent-fields"></div><div class="actions"><button class="primary" type="submit">Enregistrer cet agent</button></div></form>`;
   const state = settings.secrets ?? {};
-  const secrets = `<form class="panel" data-settings="secrets"><h2>Secrets</h2><p class="muted">Un champ vide conserve la valeur actuelle. Jeton d'administration : en place. Jeton de lecture : ${state.readToken ? "en place" : "absent"}. Mot de passe de l'interface : ${state.uiPassword ? "en place" : "absent"}. Adresse de la base : en place. Clé de chiffrement des agents : en place, elle reste dans le fichier du serveur.</p><div class="settings-grid">${secretField("secrets.apiToken", "Jeton d'administration", "16 caractères minimum")}${secretField("secrets.readToken", "Jeton de lecture", "Vide pour le conserver")}${secretField("secrets.databaseUrl", "Adresse de la base", "Prise en compte au redémarrage")}${secretField("secrets.uiPassword", "Mot de passe de l'interface", "12 caractères minimum, vide pour le conserver")}</div><label class="scope"><input name="secrets.clearReadToken" type="checkbox" /><span class="switch"></span><span><strong>Retirer le jeton de lecture</strong><span class="hint">Ignoré si un nouveau jeton est saisi au-dessus.</span></span></label><div class="actions"><button class="primary" type="submit">Enregistrer les secrets</button></div></form>`;
+  const secrets = `<form class="panel" data-settings="secrets"><h2>Secrets</h2><p class="muted">Un champ vide conserve la valeur actuelle. Générer en propose une nouvelle, affichée une seule fois après l'enregistrement. Jeton d'administration : en place. Jeton de lecture : ${state.readToken ? "en place" : "absent"}. Mot de passe de l'interface : ${state.uiPassword ? "en place" : "absent"}. Adresse de la base : en place. Clé de chiffrement des agents : en place, elle reste dans le fichier du serveur.</p><div class="settings-grid">${secretField("secrets.apiToken", "Jeton d'administration", "16 caractères minimum", 16)}${secretField("secrets.readToken", "Jeton de lecture", "Vide pour le conserver", 16)}${secretField("secrets.databaseUrl", "Adresse de la base", "Prise en compte au redémarrage")}${secretField("secrets.uiPassword", "Mot de passe de l'interface", "12 caractères minimum, vide pour le conserver", 12)}</div><label class="scope"><input name="secrets.clearReadToken" type="checkbox" /><span class="switch"></span><span><strong>Retirer le jeton de lecture</strong><span class="hint">Ignoré si un nouveau jeton est saisi au-dessus.</span></span></label><div class="actions"><button class="primary" type="submit">Enregistrer les secrets</button></div></form>`;
   return pageHeading("Paramètres", "Chaque carte s'enregistre seule. Les secrets ne sont jamais réaffichés.", "") + `<section class="settings">${groups}${secrets}${agent}</section>`;
 }
 
@@ -347,8 +379,32 @@ function settingField(path, label, type, value, extra, choices) {
   return `<label class="field"><span>${escapeHtml(label)}</span><input name="${escapeHtml(path)}" type="${type}" value="${escapeHtml(value == null ? "" : String(value))}"${placeholder} />${hint}</label>`;
 }
 
-function secretField(path, label, hint) {
-  return `<label class="field"><span>${escapeHtml(label)}</span><input name="${escapeHtml(path)}" type="password" autocomplete="new-password" placeholder="Conserver" /><span class="hint">${escapeHtml(hint)}</span></label>`;
+function secretField(path, label, hint, min = 0) {
+  const button = min > 0 ? `<button class="ghost" type="button" data-generate-secret>Générer</button>` : "";
+  const marker = min > 0 ? ` data-secret="${min}" data-secret-label="${escapeHtml(label)}"` : "";
+  return `<div class="field"><label>${escapeHtml(label)}</label><span class="secret-line"><input name="${escapeHtml(path)}" type="text" autocomplete="off" spellcheck="false" placeholder="Conserver"${marker} />${button}</span><span class="hint">${escapeHtml(hint)}</span></div>`;
+}
+
+function generatedSecret() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_";
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let secret = "";
+  for (const byte of bytes) secret += alphabet[byte % alphabet.length];
+  return secret;
+}
+
+function secretValues(form) {
+  return [...form.querySelectorAll("input[data-secret]")].flatMap((input) => {
+    if (!(input instanceof HTMLInputElement) || input.value.trim() === "") return [];
+    return [{ label: input.dataset.secretLabel || "Secret", value: input.value }];
+  });
+}
+
+function showSecrets(items) {
+  if (items.length === 0) return;
+  const rows = items.map((item) => `<label class="field"><span>${escapeHtml(item.label)}</span><input readonly value="${escapeHtml(item.value)}" /></label>`).join("");
+  openDialog("Secret à recopier", `<p>Cette valeur ne sera plus affichée.</p>${rows}<div class="actions"><button class="ghost" type="button" data-copy-secret>Copier</button><button class="primary" type="button" data-close>Fermer</button></div>`);
 }
 
 function valueAt(source, path) {
@@ -655,9 +711,11 @@ async function saveSettings(form) {
       await saveAgentSettings(form);
       return;
     }
+    const revealed = secretValues(form);
     const result = await api("/settings", { method: "PUT", body: readSettingsForm(form) });
     toast(result.restartRequired ? "Enregistré. Un redémarrage du service applique l'écoute, le journal, la documentation, la taille des requêtes, la base ou l'activation de l'interface." : "Réglage appliqué");
     if (form.dataset.settings === "secrets") form.reset();
+    showSecrets(revealed);
   } catch (error) {
     toast(error instanceof Error ? error.message : "Réglage refusé");
   }
@@ -679,11 +737,12 @@ async function saveAgentSettings(form) {
   await api(`/agents/${encodeURIComponent(agentId)}`, { method: "PATCH", body: { name, type, maxConcurrency: Number(maxConcurrency), capabilities } });
   if (secret) await api(`/agents/${encodeURIComponent(agentId)}/secret`, { method: "POST", body: { secret } });
   const moves = runtime.server?.host || runtime.server?.protocol || runtime.server?.port;
-  if (secret) toast("Agent mis à jour. Recopier le nouveau secret dans son fichier, puis redémarrer son service.");
+  if (secret) toast("Agent mis à jour. Recopier le secret, puis redémarrer son service.");
   else if (moves) toast("Enregistré. L'agent joindra la nouvelle adresse à son prochain contact.");
   else toast("Agent mis à jour. L'exécution est prise au prochain contact.");
   const secretInput = form.elements.namedItem("identity.secret");
   if (secretInput instanceof HTMLInputElement) secretInput.value = "";
+  if (secret) showSecrets([{ label: "Secret de l'agent", value: secret }]);
 }
 
 function namedValue(form, name) {
@@ -719,7 +778,7 @@ async function showAgentSettings(agentId) {
       ["intervals.inventorySeconds", "Inventaire", "number", "secondes"],
       ["intervals.resourcesSeconds", "Ressources", "number", "secondes"],
       ["concurrency.total", "Travaux simultanés sur l'agent", "number"],
-      ["concurrency.apt", "Mises à jour simultanées", "number", "Ne peut pas dépasser le total"],
+      ["concurrency.apt", "Mises à jour simultanées", "number", "Annoncé au serveur. Ne peut pas dépasser le total"],
       ["metrics.source", "Source des métriques", "select", "Proxmox exige un cluster et un VMID", ["LOCAL_AGENT", "PROXMOX"]],
       ["machine.type", "Type de machine", "select", null, ["VM", "PHYSICAL"]],
       ["machine.displayName", "Nom affiché", "text"],
@@ -733,7 +792,7 @@ async function showAgentSettings(agentId) {
       <label class="field"><span>Nom</span><input name="identity.name" value="${escapeHtml(agent.name ?? "")}" /></label>
       <label class="field"><span>Type</span><select name="identity.type"><option value="linux-node" ${agent.type === "linux-node" ? "selected" : ""}>linux-node</option><option value="proxmox-node" ${agent.type === "proxmox-node" ? "selected" : ""}>proxmox-node</option></select></label>
       <label class="field"><span>File d'attente</span><input name="identity.maxConcurrency" type="number" value="${escapeHtml(String(agent.maxConcurrency ?? 4))}" /><span class="hint">Travaux acceptés par cet agent</span></label>
-      <label class="field"><span>Nouveau secret</span><input name="identity.secret" type="password" autocomplete="new-password" placeholder="Conserver" /><span class="hint">À recopier dans le fichier de l'agent, puis redémarrer son service</span></label>
+      <div class="field"><label>Nouveau secret</label><span class="secret-line"><input name="identity.secret" type="text" autocomplete="off" spellcheck="false" placeholder="Conserver" data-secret="16" data-secret-label="Secret de l'agent" /><button class="ghost" type="button" data-generate-secret>Générer</button></span><span class="hint">À recopier dans le fichier de l'agent, puis redémarrer son service</span></div>
     </div><div class="field"><span>Capacités</span><div class="checks">${CAPABILITIES.map((item) => `<label><input type="checkbox" name="capabilities" value="${item}" ${(agent.capabilities ?? []).includes(item) ? "checked" : ""}/> ${escapeHtml(item)}</label>`).join("")}</div></div>`;
     const runtime = `<p class="eyebrow">Exécution</p><p class="muted">Conserver laisse le fichier de l'agent tel quel. Un champ déjà enregistré ici est renvoyé tel qu'il est affiché.</p><div class="settings-grid">${fields.map(([path, label, type, extra, choices]) => settingField(path, label, type, valueAt(current, path), extra, choices)).join("")}</div>`;
     host.innerHTML = identity + runtime;
@@ -823,6 +882,11 @@ document.addEventListener("click", (event) => {
     void openPackageDialog(Number(packageButton.dataset.package)).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
     return;
   }
+  const installedButton = event.target instanceof Element ? event.target.closest("[data-installed]") : null;
+  if (installedButton instanceof HTMLElement && installedButton.dataset.installed !== undefined) {
+    void openInstalledDialog(Number(installedButton.dataset.installed)).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
+    return;
+  }
   const target = event.target instanceof HTMLElement ? event.target : null;
   if (!target) return;
   if (target.dataset.createAgent !== undefined) openAgentDialog();
@@ -837,9 +901,40 @@ document.addEventListener("click", (event) => {
   if (target.dataset.linkProxmox) {
     void openLinkDialog(target.dataset.linkProxmox).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
   }
+  if (target.dataset.unlinkProxmox) {
+    const id = target.dataset.unlinkProxmox;
+    void mutate("VM déliée", async () => {
+      await api(`/machines/${encodeURIComponent(id)}/proxmox-link`, { method: "DELETE" });
+      closeDialog();
+    });
+  }
+  if (target.dataset.generateSecret !== undefined) {
+    const field = target.closest(".field");
+    const input = field?.querySelector("input");
+    if (input instanceof HTMLInputElement) {
+      input.value = generatedSecret();
+      input.focus();
+      input.select();
+    }
+  }
+  if (target.dataset.copySecret !== undefined) {
+    const inputs = [...(target.closest(".dialog")?.querySelectorAll("input") ?? [])].filter((item) => item instanceof HTMLInputElement);
+    const text = inputs.map((item) => item.value).filter(Boolean).join("\n");
+    if (text && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text).then(() => toast("Copié")).catch(() => toast("Sélectionnez le secret pour le copier"));
+    }
+  }
+  if (target.dataset.collectPackages !== undefined) {
+    void launchAction("apt.packages", { type: "fleet" }).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
+  }
   if (target.dataset.action !== undefined) void openActionDialog(target.dataset.machine ?? "", target.dataset.type ?? "");
   if (target.dataset.cancel) void mutate("Annulé", () => api(`/jobs/${target.dataset.cancel}/cancel`, { method: "POST", body: {} }));
   if (target.dataset.ack) void mutate("Acquitté", () => api(`/jobs/${target.dataset.ack}/acknowledge`, { method: "POST", body: {} }));
+  if (target.dataset.launchAck === "yes" || target.dataset.launchAck === "no") {
+    const pending = pendingLaunch;
+    pendingLaunch = null;
+    if (pending) void pending(target.dataset.launchAck === "yes").catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
+  }
   if (target.dataset.deleteAgent) {
     const id = target.dataset.deleteAgent;
     void mutate("Agent retiré", async () => {
@@ -861,7 +956,7 @@ function openAgentDialog() {
     ${field("Identifiant", "id", "text", "edge-01")}
     ${field("Nom", "name", "text", "edge-01")}
     <div class="field"><label>Type</label><select name="type"><option value="linux-node">linux-node</option><option value="proxmox-node">proxmox-node</option></select></div>
-    ${field("Secret", "secret", "password", "")}
+    <div class="field"><label>Secret</label><span class="secret-line"><input name="secret" type="text" autocomplete="off" spellcheck="false" required data-secret="16" data-secret-label="Secret de l'agent" /><button class="ghost" type="button" data-generate-secret>Générer</button></span><span class="hint">Générer en crée un. Il est affiché une seule fois après l'enregistrement.</span></div>
     ${field("Concurrence", "maxConcurrency", "number", "4")}
     <div class="field"><label>Capacités</label><div class="checks">${CAPABILITIES.map((item) => `<label><input type="checkbox" name="capabilities" value="${item}" ${["system", "apt", "local.metrics"].includes(item) ? "checked" : ""}/> ${item}</label>`).join("")}</div></div>
     <p class="muted">proxmox-node surveille l'hôte et ses LXC. linux-node surveille une VM ou une machine physique.</p>
@@ -869,8 +964,9 @@ function openAgentDialog() {
   </form>`, async (form) => {
     const data = formData(form);
     await api("/agents", { method: "POST", body: { id: data.id, name: data.name || data.id, type: data.type, secret: data.secret, maxConcurrency: Number(data.maxConcurrency || 4), capabilities: data.capabilities } });
-    toast("Agent enregistré. Recopier le secret dans son fichier de configuration.");
+    toast("Agent enregistré");
     closeDialog();
+    showSecrets([{ label: "Secret de l'agent", value: data.secret }]);
     void render();
   });
 }
@@ -882,7 +978,7 @@ async function openEditDialog(id) {
     <div class="field"><label>Type</label><select name="type"><option value="linux-node" ${agent.type === "linux-node" ? "selected" : ""}>linux-node</option><option value="proxmox-node" ${agent.type === "proxmox-node" ? "selected" : ""}>proxmox-node</option></select></div>
     ${field("Concurrence", "maxConcurrency", "number", String(agent.maxConcurrency))}
     <div class="field"><label>Capacités</label><div class="checks">${CAPABILITIES.map((item) => `<label><input type="checkbox" name="capabilities" value="${item}" ${(agent.capabilities ?? []).includes(item) ? "checked" : ""}/> ${item}</label>`).join("")}</div></div>
-    <div class="field"><label>Nouveau secret</label><input name="secret" type="password" placeholder="Laisser vide pour le conserver" autocomplete="new-password" /></div>
+    <div class="field"><label>Nouveau secret</label><span class="secret-line"><input name="secret" type="text" autocomplete="off" spellcheck="false" placeholder="Laisser vide pour le conserver" data-secret="16" data-secret-label="Secret de l'agent" /><button class="ghost" type="button" data-generate-secret>Générer</button></span></div>
     <div class="actions"><button class="danger" type="button" data-delete-agent="${escapeHtml(agent.id)}">Retirer</button><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Enregistrer</button></div>
   </form>`, async (form) => {
     const data = formData(form);
@@ -890,6 +986,7 @@ async function openEditDialog(id) {
     if (data.secret) await api(`/agents/${encodeURIComponent(id)}/secret`, { method: "POST", body: { secret: data.secret } });
     toast("Agent mis à jour");
     closeDialog();
+    if (data.secret) showSecrets([{ label: "Secret de l'agent", value: data.secret }]);
     void render();
   });
 }
@@ -915,10 +1012,25 @@ async function openPackageDialog(index) {
   openDialog(item.name, `<p class="muted">${known.length} machine${known.length > 1 ? "s" : ""} concernée${known.length > 1 ? "s" : ""}.</p>${table(["Machine", "Type", "Version", "État"], rows || emptyRow(4))}<form id="dialog-form"><p>Installe les mises à jour APT des machines en marche de cette liste. Une simulation est refaite avant. Si un paquet doit être supprimé, cette machine est laissée de côté.</p>${aside}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button>${button}</div></form>`, async () => {
     if (running.length === 0) throw new Error("Aucune machine en marche pour ce paquet");
     if (running.length > 500) throw new Error("Trop de machines pour une seule action");
-    const job = await api("/actions", { method: "POST", body: { action: "apt.upgrade", requestedBy: "interface", selector: { type: "machines", ids: running } } });
-    closeDialog();
-    go(`/ui/jobs/${encodeURIComponent(job.id)}`);
+    await launchAction("apt.upgrade", { type: "machines", ids: running });
   });
+}
+
+async function openInstalledDialog(index) {
+  const item = installedIndex[index];
+  if (!item) return;
+  await loadDirectory();
+  const known = (item.machines ?? []).map((entry) => ({
+    entry,
+    machine: directory.machines.find((candidate) => candidate.id === entry.id) ?? null,
+  }));
+  known.sort((left, right) => machineLabel(left.machine ?? { displayName: left.entry.id, type: "" }).localeCompare(machineLabel(right.machine ?? { displayName: right.entry.id, type: "" }), "fr"));
+  const rows = known.map(({ entry, machine }) => {
+    const label = machine ? machineLabel(machine) : entry.id;
+    const name = machine ? `<a href="/ui/machines/${encodeURIComponent(machine.id)}">${escapeHtml(label)}</a>` : escapeHtml(label);
+    return `<tr><td>${name}</td><td>${escapeHtml(machine ? typeLabel(machine.type) : "—")}</td><td>${escapeHtml(entry.version || "—")}</td><td>${machine ? chip(machine.status) : "—"}</td></tr>`;
+  }).join("");
+  openDialog(item.name, `<p class="muted">${known.length} machine${known.length > 1 ? "s" : ""}.</p>${table(["Machine", "Type", "Version", "État"], rows || emptyRow(4))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
 }
 
 function versionStep(entry) {
@@ -991,9 +1103,7 @@ function openUpgradeDialog(machineId) {
 }
 
 async function launchNamed(action, machineId) {
-  const job = await api("/actions", { method: "POST", body: { action, requestedBy: "interface", selector: selectorFor(machineId) } });
-  closeDialog();
-  go(`/ui/jobs/${encodeURIComponent(job.id)}`);
+  await launchAction(action, selectorFor(machineId));
 }
 
 async function showUpdates(machineId) {
@@ -1048,9 +1158,7 @@ async function openActionDialog(machineId, machineType) {
     const parameters = {};
     if (chosen?.unit && data.unit) parameters.unit = data.unit;
     if (chosen?.lines && data.lines) parameters.lines = Number(data.lines);
-    const job = await api("/actions", { method: "POST", body: { action: data.action, requestedBy: "interface", selector, ...(Object.keys(parameters).length ? { parameters } : {}) } });
-    closeDialog();
-    go(`/ui/jobs/${encodeURIComponent(job.id)}`);
+    await launchAction(data.action, selector, parameters);
   });
   const form = document.querySelector("#dialog-form");
   if (form instanceof HTMLFormElement) {
@@ -1090,6 +1198,46 @@ function buildSelector(form, data) {
   return { type: "machine", id: data.machineId };
 }
 
+let pendingLaunch = null;
+
+async function launchAction(action, selector, parameters = {}) {
+  const chosen = ACTIONS.find((item) => item.name === action);
+  if (chosen?.mutating) {
+    try {
+      const preview = await api("/actions/preview", { method: "POST", body: { action, requestedBy: "interface", selector, ...(Object.keys(parameters).length ? { parameters } : {}) } });
+      const machines = preview.machines ?? [];
+      if (machines.length > 0) {
+        openAckDialog(machines, (acknowledge) => postAction(action, selector, parameters, acknowledge));
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || error.status !== 404) throw error;
+    }
+  }
+  await postAction(action, selector, parameters, false);
+}
+
+function openAckDialog(machines, start) {
+  const rows = machines.flatMap((machine) => (machine.blockers ?? []).map((blocker) => `<tr><td>${escapeHtml(machine.displayName)}</td><td>${escapeHtml(actionLabel(blocker.action))}</td><td>${chip(blocker.status)}</td><td class="muted">${escapeHtml(blocker.errorMessage || "Résultat non confirmé")}</td></tr>`)).join("");
+  openDialog("Acquitter avant le lancement", `<p>Ces machines ont une tâche interrompue ou non résolue. Une nouvelle action qui modifie la machine attend cet acquittement.</p>${table(["Machine", "Tâche", "État", "Détail"], rows)}<div class="actions"><button class="ghost" type="button" data-close>Annuler</button><button class="ghost" type="button" data-launch-ack="no">Lancer sans acquitter</button><button class="primary" type="button" data-launch-ack="yes">Acquitter et lancer</button></div>`);
+  pendingLaunch = start;
+}
+
+async function postAction(action, selector, parameters, acknowledge) {
+  const job = await api("/actions", {
+    method: "POST",
+    body: {
+      action,
+      requestedBy: "interface",
+      selector,
+      ...(acknowledge ? { acknowledgeBlockers: true } : {}),
+      ...(Object.keys(parameters).length ? { parameters } : {}),
+    },
+  });
+  closeDialog();
+  go(`/ui/jobs/${encodeURIComponent(job.id)}`);
+}
+
 function openDialog(title, html, onSubmit) {
   closeDialog();
   const back = document.createElement("div");
@@ -1104,7 +1252,10 @@ function openDialog(title, html, onSubmit) {
     void onSubmit(form).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
   });
 }
-function closeDialog() { document.querySelector(".dialog-back")?.remove(); }
+function closeDialog() {
+  pendingLaunch = null;
+  document.querySelector(".dialog-back")?.remove();
+}
 function field(label, name, type, value) { return `<div class="field"><label>${escapeHtml(label)}</label><input name="${name}" type="${type}" value="${escapeHtml(value)}" /></div>`; }
 function formData(form) {
   const data = { capabilities: [] };

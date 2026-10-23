@@ -15,6 +15,7 @@ import type {
   NonceRecord,
   PageQuery,
   ProxmoxNodeRecord,
+  InstalledResult,
   PackageHit,
   UpdateCount,
   UpdatePackageRecord,
@@ -73,6 +74,7 @@ export interface Store {
   listSnapshots(machineId: string, query: PageQuery): Promise<Page<UpdateSnapshotRecord>>;
   latestUpdateCounts(machineIds: string[]): Promise<UpdateCount[]>;
   latestPackageHits(): Promise<PackageHit[]>;
+  latestInstalledResults(): Promise<InstalledResult[]>;
   insertJob(job: JobRecord): Promise<void>;
   findJob(id: string): Promise<JobRecord | null>;
   listJobs(query: JobListQuery): Promise<Page<JobRecord>>;

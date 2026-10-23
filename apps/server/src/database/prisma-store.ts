@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import type {
   AgentRecord,
+  InstalledResult,
   AgentUpdate,
   AlertRecord,
   ClusterRecord,
@@ -440,6 +441,29 @@ export class PrismaStore implements Store {
     }));
   }
 
+  async latestInstalledResults(): Promise<InstalledResult[]> {
+    const rows = await this.prisma.$queryRaw<Array<{ machineId: string; result: unknown }>>(Prisma.sql`
+      SELECT j.machineId AS machineId, j.result AS result
+      FROM Job j
+      INNER JOIN (
+        SELECT machineId, MAX(finishedAt) AS finishedAt
+        FROM Job
+        WHERE action = 'apt.packages' AND status = 'SUCCESS' AND machineId IS NOT NULL AND finishedAt IS NOT NULL
+        GROUP BY machineId
+      ) latest ON latest.machineId = j.machineId AND latest.finishedAt = j.finishedAt
+      WHERE j.action = 'apt.packages' AND j.status = 'SUCCESS'
+    `);
+    const seen = new Set<string>();
+    return rows.flatMap((row) => {
+      if (seen.has(row.machineId)) {
+        return [];
+      }
+      seen.add(row.machineId);
+      const result = typeof row.result === "string" ? parseJson(row.result) : row.result;
+      return [{ machineId: row.machineId, result }];
+    });
+  }
+
   async insertJob(job: JobRecord): Promise<void> {
     await this.prisma.job.create({ data: jobWrite(job) });
   }
@@ -837,6 +861,14 @@ function stringArray(value: Prisma.JsonValue): string[] {
     return [];
   }
   return value.filter((item): item is string => typeof item === "string");
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function readArgs(value: Prisma.JsonValue | null): string[] | null {
