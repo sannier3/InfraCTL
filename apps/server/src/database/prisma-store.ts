@@ -464,6 +464,33 @@ export class PrismaStore implements Store {
     });
   }
 
+  async latestSurveyResults(): Promise<InstalledResult[]> {
+    return this.latestActionResults("runtime.survey");
+  }
+
+  private async latestActionResults(action: string): Promise<InstalledResult[]> {
+    const rows = await this.prisma.$queryRaw<Array<{ machineId: string; result: unknown }>>(Prisma.sql`
+      SELECT j.machineId AS machineId, j.result AS result
+      FROM Job j
+      INNER JOIN (
+        SELECT machineId, MAX(finishedAt) AS finishedAt
+        FROM Job
+        WHERE action = ${action} AND status = 'SUCCESS' AND machineId IS NOT NULL AND finishedAt IS NOT NULL
+        GROUP BY machineId
+      ) latest ON latest.machineId = j.machineId AND latest.finishedAt = j.finishedAt
+      WHERE j.action = ${action} AND j.status = 'SUCCESS'
+    `);
+    const seen = new Set<string>();
+    return rows.flatMap((row) => {
+      if (seen.has(row.machineId)) {
+        return [];
+      }
+      seen.add(row.machineId);
+      const result = typeof row.result === "string" ? parseJson(row.result) : row.result;
+      return [{ machineId: row.machineId, result }];
+    });
+  }
+
   async insertJob(job: JobRecord): Promise<void> {
     await this.prisma.job.create({ data: jobWrite(job) });
   }

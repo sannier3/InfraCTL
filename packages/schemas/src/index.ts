@@ -72,6 +72,12 @@ export const selectorSchema = z.discriminatedUnion("type", [
     .strict(),
   z
     .object({
+      type: z.literal("agents"),
+      ids: z.array(agentIdSchema).min(1).max(100),
+    })
+    .strict(),
+  z
+    .object({
       type: z.literal("proxmox-node"),
       id: nonEmpty.max(128),
       includeGuests: z.boolean(),
@@ -92,19 +98,21 @@ export const selectorSchema = z.discriminatedUnion("type", [
 ]);
 export type Selector = z.infer<typeof selectorSchema>;
 
+export const actionParametersSchema = z
+  .object({
+    unit: systemdUnitSchema.optional(),
+    lines: z.number().int().min(1).max(2000).optional(),
+    mode: z.enum(["script", "server"]).optional(),
+  })
+  .strict();
+
 export const actionRequestSchema = z
   .object({
     action: actionNameSchema,
     requestedBy: z.string().trim().min(1).max(128).optional(),
     selector: selectorSchema,
     acknowledgeBlockers: z.boolean().optional(),
-    parameters: z
-      .object({
-        unit: systemdUnitSchema.optional(),
-        lines: z.number().int().min(1).max(2000).optional(),
-      })
-      .strict()
-      .optional(),
+    parameters: actionParametersSchema.optional(),
   })
   .strict();
 export type ActionRequest = z.infer<typeof actionRequestSchema>;
@@ -218,13 +226,7 @@ export const agentTargetSchema = z
       })
       .strict()
       .optional(),
-    parameters: z
-      .object({
-        unit: systemdUnitSchema.optional(),
-        lines: z.number().int().min(1).max(2000).optional(),
-      })
-      .strict()
-      .optional(),
+    parameters: actionParametersSchema.optional(),
   })
   .strict();
 export type AgentTarget = z.infer<typeof agentTargetSchema>;

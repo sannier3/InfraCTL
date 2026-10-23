@@ -39,4 +39,34 @@ describe("validation des requêtes", () => {
     expect(systemdUnitSchema.safeParse("-bad").success).toBe(false);
     expect(systemdUnitSchema.safeParse("foo bar").success).toBe(false);
   });
+
+  it("accepte la mise à jour d'une liste d'agents", () => {
+    const parsed = actionRequestSchema.safeParse({
+      action: "agent.update",
+      selector: { type: "agents", ids: ["pve-r730"] },
+      parameters: { mode: "server" },
+    });
+    expect(parsed.success).toBe(true);
+    const job = agentJobSchema.safeParse({
+      jobId: "5f0b6b0a-2a7e-4c1d-9c2a-1b0d5e6f7a8b",
+      action: "agent.update",
+      category: "WRITE",
+      target: {
+        machineId: "5f0b6b0a-2a7e-4c1d-9c2a-1b0d5e6f7a8c",
+        machineType: "VM",
+        hostname: "host",
+        parameters: { mode: "script" },
+      },
+    });
+    expect(job.success).toBe(true);
+  });
+
+  it("refuse un mode de mise à jour inconnu", () => {
+    const parsed = actionRequestSchema.safeParse({
+      action: "agent.update",
+      selector: { type: "agents", ids: ["pve-r730"] },
+      parameters: { mode: "shell" },
+    });
+    expect(parsed.success).toBe(false);
+  });
 });

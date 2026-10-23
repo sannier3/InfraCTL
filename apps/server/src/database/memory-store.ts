@@ -400,6 +400,24 @@ export class MemoryStore implements Store {
     return [...latest.values()].flatMap((job) => (job.machineId ? [{ machineId: job.machineId, result: job.result }] : []));
   }
 
+  async latestSurveyResults(): Promise<InstalledResult[]> {
+    return this.latestActionResults("runtime.survey");
+  }
+
+  private latestActionResults(action: JobRecord["action"]): InstalledResult[] {
+    const latest = new Map<string, JobRecord>();
+    for (const job of this.jobs.values()) {
+      if (job.action !== action || job.status !== "SUCCESS" || !job.machineId || !job.finishedAt) {
+        continue;
+      }
+      const current = latest.get(job.machineId);
+      if (!current?.finishedAt || job.finishedAt.getTime() > current.finishedAt.getTime()) {
+        latest.set(job.machineId, job);
+      }
+    }
+    return [...latest.values()].flatMap((job) => (job.machineId ? [{ machineId: job.machineId, result: job.result }] : []));
+  }
+
   async insertJob(job: JobRecord): Promise<void> {
     this.jobs.set(job.id, clone(job));
   }

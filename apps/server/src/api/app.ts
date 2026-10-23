@@ -32,6 +32,7 @@ import { ERROR_CODES, JOB_STATUSES, MACHINE_STATUSES, MACHINE_TYPES } from "@inf
 import { createAgentAuth, createApiAuth, requireAgentId } from "../auth/http.js";
 import { AgentAdmin } from "../agents/admin.js";
 import { endpointFromRequest, installScriptUrl, renderAgentConfig, renderAgentInstallCommand } from "../agents/config-file.js";
+import { readAgentBundle } from "../agents/bundle.js";
 import { decodeCredentialsKey, decryptSecret } from "../crypto/secrets.js";
 import { registerUi, uiDirectory } from "../ui/routes.js";
 import { createSessionService } from "../ui/session.js";
@@ -41,6 +42,7 @@ import { formatConfigIssues } from "@infra/schemas";
 import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
 import { InventoryService } from "../inventory/service.js";
+import { aggregateSurveys } from "../runtime/survey.js";
 import { JobService, type Principal } from "../jobs/service.js";
 import { Mutex } from "../lock.js";
 import { JobWaitHub } from "../scheduler/hub.js";
@@ -146,6 +148,42 @@ const fleetPackageMachineSchema = z
     newVersion: z.string().nullable(),
     changeType: z.string(),
     security: z.boolean(),
+  })
+  .strict();
+
+const surveyResponseSchema = z
+  .object({
+    data: z
+      .object({
+        ports: z.array(z.object({
+          protocol: z.enum(["tcp", "udp"]),
+          port: z.number().int(),
+          machineCount: z.number().int(),
+          machines: z.array(z.object({ id: z.string(), address: z.string() }).strict()),
+        }).strict()),
+        hosts: z.array(z.object({
+          machineId: z.string(),
+          installed: z.boolean(),
+          active: z.boolean(),
+          enabled: z.boolean(),
+          containers: z.array(z.object({
+            id: z.string(),
+            name: z.string(),
+            image: z.string(),
+            state: z.string(),
+            ports: z.string(),
+          }).strict()),
+        }).strict()),
+        projects: z.array(z.object({
+          machineId: z.string(),
+          directory: z.string(),
+          file: z.string(),
+          active: z.boolean(),
+          services: z.number().int(),
+          running: z.number().int(),
+        }).strict()),
+      })
+      .strict(),
   })
   .strict();
 
@@ -580,6 +618,9 @@ export async function buildApp(deps: AppDeps): Promise<{
     scope.get("/packages", { schema: { response: withErrors(z.object({ data: z.array(installedPackageSchema) }).strict()) } }, async () => {
       return { data: aggregateInstalled(await deps.store.latestInstalledResults()) };
     });
+    scope.get("/services", { schema: { response: withErrors(surveyResponseSchema) } }, async () => {
+      return { data: aggregateSurveys(await deps.store.latestSurveyResults()) };
+    });
     scope.get("/machines", { schema: { querystring: machineQuery, response: withErrors(pageSchema(machineResponseSchema)) } }, async (request) => {
       const page = await deps.store.listMachines({
         page: request.query.page,
@@ -807,6 +848,14 @@ export async function buildApp(deps: AppDeps): Promise<{
     });
     scope.post("/jobs/:id/fail", { schema: { params: idParams, body: jobFailBodySchema, response: withErrors(jobResponseSchema) } }, async (request) => {
       return presentJob(await jobs.fail(requireAgentId(request), request.params.id, request.body, now()));
+    });
+    scope.get("/update-bundle", async (_request, reply) => {
+      const script = await findInstallScript(dirname(fileURLToPath(import.meta.url)));
+      if (!script) {
+        throw new AppError(404, ERROR_CODES.NOT_FOUND, "code agent compilé introuvable");
+      }
+      const bytes = await readAgentBundle(dirname(script));
+      return reply.type("application/octet-stream").send(bytes);
     });
   }, { prefix: "/api/v1/agent" });
 

@@ -86,6 +86,8 @@ export const ACTION_NAMES = [
   "proxmox.host.update",
   "lxc.info",
   "lxc.resources",
+  "runtime.survey",
+  "agent.update",
 ] as const;
 export type ActionName = (typeof ACTION_NAMES)[number];
 
@@ -329,6 +331,18 @@ export const ACTION_CATALOG: { readonly [K in ActionName]: ActionDefinition } = 
     hostMaintenance: "never",
     neverAutoRetry: false,
   },
+  "runtime.survey": {
+    name: "runtime.survey",
+    category: "READ",
+    supportedTargets: GUEST_AND_HOST,
+    timeoutMs: 90_000,
+    capabilities: ["system"],
+    enabled: true,
+    mutating: false,
+    countsAsApt: false,
+    hostMaintenance: "never",
+    neverAutoRetry: false,
+  },
   "lxc.resources": {
     name: "lxc.resources",
     category: "READ",
@@ -340,6 +354,18 @@ export const ACTION_CATALOG: { readonly [K in ActionName]: ActionDefinition } = 
     countsAsApt: false,
     hostMaintenance: "never",
     neverAutoRetry: false,
+  },
+  "agent.update": {
+    name: "agent.update",
+    category: "WRITE",
+    supportedTargets: ["PROXMOX_NODE", "VM", "PHYSICAL"],
+    timeoutMs: 20 * 60_000,
+    capabilities: ["system"],
+    enabled: true,
+    mutating: true,
+    countsAsApt: false,
+    hostMaintenance: "never",
+    neverAutoRetry: true,
   },
 };
 

@@ -1,5 +1,7 @@
 import { getAction, type ActionName } from "@infra/types";
 import type { AgentConfig, AgentJob } from "@infra/schemas";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   APT_CHECK_ARGS,
   APT_CHECK_EXECUTABLE,
@@ -17,6 +19,8 @@ import type { SystemProbe } from "../adapters/local-linux/probe.js";
 import { collectProxmoxInventory } from "../proxmox/collect.js";
 import { lxcIndexArgs, parsePveVersion } from "../proxmox/parse.js";
 import { parseInstalledPackages } from "./apt/installed.js";
+import { acceptComposePath, parseComposeProjects, parseDockerPs, parseListeners, systemdWord } from "./runtime/survey.js";
+import { detectInstallRoot, performAgentUpdate } from "./agent/update.js";
 import { parseAptSimulation } from "./apt/parse.js";
 import { lineArg, placeCommand, resolvePlace, unitArg, type Place } from "./target.js";
 import type { ServerClient } from "../transport/client.js";
@@ -82,7 +86,49 @@ const HANDLERS: Record<ActionName, ActionHandler> = {
   "proxmox.host.update": hostUpdate,
   "lxc.info": lxcInfo,
   "lxc.resources": lxcResources,
+  "runtime.survey": runtimeSurvey,
+  "agent.update": agentUpdate,
 };
+
+async function agentUpdate(context: ActionContext): Promise<ActionOutcome> {
+  const mode = context.job.target.parameters?.mode === "server" ? "server" : "script";
+  if (mode === "server" && !context.client) {
+    return {
+      status: "FAILED",
+      exitCode: null,
+      errorCode: "PROCESS_FAILED",
+      errorMessage: "téléchargement indisponible",
+      executable: null,
+      args: null,
+    };
+  }
+  try {
+    const root = await detectInstallRoot(dirname(fileURLToPath(import.meta.url)));
+    return performAgentUpdate({
+      mode,
+      root,
+      runner: context.runner,
+      signal: context.signal,
+      log: context.log,
+      timeoutMs: getAction("agent.update").timeoutMs,
+      download: () => {
+        if (!context.client) {
+          return Promise.reject(new Error("téléchargement indisponible"));
+        }
+        return context.client.updateBundle();
+      },
+    });
+  } catch (error) {
+    return {
+      status: "FAILED",
+      exitCode: null,
+      errorCode: "PROCESS_FAILED",
+      errorMessage: error instanceof Error ? error.message : "mise à jour impossible",
+      executable: null,
+      args: null,
+    };
+  }
+}
 
 async function systemInfo(context: ActionContext): Promise<ActionOutcome> {
   const opened = await openPlace(context);
@@ -197,6 +243,136 @@ async function aptPackages(context: ActionContext): Promise<ActionOutcome> {
     executable: command.executable,
     args: command.args,
     result: { packageCount: packages.length, packages },
+  };
+}
+
+async function runtimeSurvey(context: ActionContext): Promise<ActionOutcome> {
+  const opened = await openPlace(context);
+  if (isOutcome(opened)) {
+    return opened;
+  }
+  const listenersRun = await capture(context, opened.place, "ss", ["-H", "-lntu"]);
+  if ("stop" in listenersRun) {
+    return listenersRun.stop;
+  }
+  if (listenersRun.result.exitCode !== 0) {
+    return failed(listenersRun.command, listenersRun.result.exitCode, listenersRun.result.stderr.trim().slice(0, 500) || "ss a échoué");
+  }
+  const activeRun = await capture(context, opened.place, "systemctl", ["is-active", "docker"]);
+  if ("stop" in activeRun) {
+    return activeRun.stop;
+  }
+  const enabledRun = await capture(context, opened.place, "systemctl", ["is-enabled", "docker"]);
+  if ("stop" in enabledRun) {
+    return enabledRun.stop;
+  }
+  const versionRun = await capture(context, opened.place, "docker", ["version", "--format", "{{.Server.Version}}"]);
+  if ("stop" in versionRun) {
+    return versionRun.stop;
+  }
+  const installed = versionRun.result.exitCode === 0 && versionRun.result.stdout.trim().length > 0;
+  let containers: ReturnType<typeof parseDockerPs> = [];
+  let containerStdout = "";
+  if (installed) {
+    const psRun = await capture(context, opened.place, "docker", ["ps", "-a", "--format", "{{json .}}"]);
+    if ("stop" in psRun) {
+      return psRun.stop;
+    }
+    if (psRun.result.exitCode === 0) {
+      containerStdout = psRun.result.stdout.slice(0, 200_000);
+      containers = parseDockerPs(containerStdout);
+    }
+  }
+  const findRun = await capture(context, opened.place, "find", [
+    "/opt",
+    "-xdev",
+    "-mindepth",
+    "2",
+    "-maxdepth",
+    "5",
+    "(",
+    "-name",
+    "docker-compose.yml",
+    "-o",
+    "-name",
+    "docker-compose.yaml",
+    "-o",
+    "-name",
+    "compose.yml",
+    "-o",
+    "-name",
+    "compose.yaml",
+    ")",
+    "-type",
+    "f",
+  ]);
+  if ("stop" in findRun) {
+    return findRun.stop;
+  }
+  const files = findRun.result.exitCode === 0
+    ? findRun.result.stdout.split("\n").map((line) => line.trim()).filter((line) => acceptComposePath(line))
+    : [];
+  const projects = parseComposeProjects(files, containerStdout);
+  const activeWord = systemdWord(activeRun.result.stdout);
+  const enabledWord = systemdWord(enabledRun.result.stdout);
+  context.log("system", `${parseListeners(listenersRun.result.stdout).length} ports, ${containers.length} conteneurs, ${projects.length} projets`);
+  return {
+    status: "SUCCESS",
+    exitCode: 0,
+    executable: listenersRun.command.executable,
+    args: listenersRun.command.args,
+    result: {
+      listeners: parseListeners(listenersRun.result.stdout),
+      docker: {
+        installed,
+        active: activeWord === "active",
+        enabled: enabledWord === "enabled",
+        containers,
+      },
+      projects,
+    },
+  };
+}
+
+async function capture(
+  context: ActionContext,
+  place: Place,
+  executable: string,
+  args: readonly string[],
+): Promise<{ stop: ActionOutcome } | { command: { executable: string; args: string[] }; result: ProcessResult }> {
+  const command = placeCommand(place, executable, args);
+  const result = await context.runner.run({
+    executable: command.executable,
+    args: command.args,
+    timeoutMs: 20_000,
+    env: SAFE_PROCESS_ENV,
+    allowSigkill: true,
+    sigkillAfterMs: 5_000,
+    signal: context.signal,
+  });
+  if (context.signal.aborted || result.timedOut) {
+    return {
+      stop: {
+        status: "INTERRUPTED",
+        exitCode: result.exitCode,
+        errorCode: context.signal.aborted ? "AGENT_SHUTDOWN" : "TIMEOUT",
+        errorMessage: context.signal.aborted ? "agent arrêté pendant runtime.survey" : "runtime.survey a dépassé son délai",
+        executable: command.executable,
+        args: command.args,
+      },
+    };
+  }
+  return { command, result };
+}
+
+function failed(command: { executable: string; args: string[] }, exitCode: number | null, message: string): ActionOutcome {
+  return {
+    status: "FAILED",
+    exitCode,
+    errorCode: "PROCESS_FAILED",
+    errorMessage: message,
+    executable: command.executable,
+    args: command.args,
   };
 }
 

@@ -2,6 +2,7 @@ import { DEFAULT_CAPABILITIES, getAction, type Capability } from "@infra/types";
 import type { AgentConfig, InventoryBody, ResourcesBody } from "@infra/schemas";
 import { backoffDelayMs } from "@infra/utils";
 import { runRegisteredAction } from "./actions/registry.js";
+import { SAFE_PROCESS_ENV } from "./adapters/local-linux/apt.js";
 import { cpuUsageFromSamples, type CpuSample, type SystemProbe } from "./adapters/local-linux/probe.js";
 import type { ProcessRunner } from "./process/types.js";
 import type { ServerClient } from "./transport/client.js";
@@ -204,6 +205,17 @@ async function executeJob(
         resolvedArguments: outcome.args,
         ...(outcome.result ? { result: outcome.result } : {}),
       });
+      if (job.action === "agent.update") {
+        await input.runner.run({
+          executable: "systemctl",
+          args: ["restart", "--no-block", "infra-agent"],
+          timeoutMs: 15_000,
+          env: SAFE_PROCESS_ENV,
+          allowSigkill: true,
+        }).catch((error: unknown) => {
+          input.logger.warn({ name: error instanceof Error ? error.name : "Error" }, "redémarrage de l'agent non lancé");
+        });
+      }
       return;
     }
     await input.client.fail(job.jobId, {

@@ -17,6 +17,7 @@ import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
 import type { Mutex } from "../lock.js";
 import { evaluateAdmission, type Limits } from "./admission.js";
+import { chooseAgentHost } from "./hosts.js";
 import { aggregateParentStatus, elapsedMs, parentCounts, parentOutcome } from "./parents.js";
 
 export type Principal = { kind: "admin" | "reader" };
@@ -294,7 +295,7 @@ export class JobService {
       throw new AppError(422, ERROR_CODES.ACTION_DISABLED, `${action.name} n'est pas activée dans cette version`);
     }
     const selected = await this.selectMachines(request);
-    const explicit = request.selector.type === "machine" || request.selector.type === "machines";
+    const explicit = request.selector.type === "machine" || request.selector.type === "machines" || request.selector.type === "agents";
     const compatible = selected.filter((machine) => action.supportedTargets.includes(machine.type));
     if (explicit && compatible.length !== selected.length) {
       throw new AppError(422, ERROR_CODES.INCOMPATIBLE_TARGET, "une cible ne prend pas en charge cette action");
@@ -439,6 +440,25 @@ export class JobService {
     });
   }
 
+  private async machinesForAgents(ids: readonly string[]): Promise<MachineRecord[]> {
+    const machines = await this.store.listAllMachines();
+    const chosen: MachineRecord[] = [];
+    for (const id of ids) {
+      const agent = await this.store.findAgent(id);
+      if (!agent) {
+        throw new AppError(404, ERROR_CODES.NOT_FOUND, "agent introuvable");
+      }
+      const host = chooseAgentHost(machines, id);
+      if (!host) {
+        throw new AppError(422, ERROR_CODES.NO_TARGETS, "cet agent n'a pas encore de machine hôte");
+      }
+      if (!chosen.some((item) => item.id === host.id)) {
+        chosen.push(host);
+      }
+    }
+    return chosen;
+  }
+
   private async selectMachines(request: ActionRequest): Promise<MachineRecord[]> {
     const selector = request.selector;
     if (selector.type === "machine") {
@@ -458,6 +478,9 @@ export class JobService {
         machines.push(machine);
       }
       return machines;
+    }
+    if (selector.type === "agents") {
+      return this.machinesForAgents(selector.ids);
     }
     if (selector.type === "fleet") {
       const machines = await this.store.listAllMachines();

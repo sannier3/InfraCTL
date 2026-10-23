@@ -48,6 +48,8 @@ YES=0
 FRESH=0
 CONFIG_CHANGED=0
 CONFIG_SOURCE=""
+NO_RESTART=0
+ROOT_OVERRIDE=""
 DB_REVIEWED=0
 
 say() { printf '%s\n' "$*"; }
@@ -85,7 +87,8 @@ Actions
   --install             installe, ou complète une installation déjà présente
   --configure           reprend la configuration et passe chaque réglage en revue.
                         Entrée conserve la valeur affichée. Une configuration neuve reste possible.
-  --update              git pull, reconstruction, migration. Ne touche pas à la configuration
+  --update              git pull, reconstruction, migration. Conserve la configuration
+  --no-restart          avec --update, laisse le service dans son état actuel
   --uninstall           arrête le service et retire le code. Conserve la configuration
   --change-password     change le mot de passe de l'interface et redémarre le serveur
   --ui enable|disable   active ou coupe l'interface, puis redémarre
@@ -124,6 +127,8 @@ Agent
   --config FICHIER      configuration complète de l'agent. - lit l'entrée
                         standard. Le questionnaire est alors ignoré. Une
                         configuration déjà présente est copiée, puis remplacée.
+  --root DOSSIER        avec --update, doit être le dossier qui contient ce
+                        script. L'action de mise à jour s'en sert.
 
 La configuration du serveur est /etc/infra-manager/config.yaml.
 Celle de l'agent est /etc/infra-agent/config.yaml.
@@ -297,6 +302,14 @@ parse_args() {
         CONFIG_SOURCE="$2"
         shift
         ;;
+      --no-restart)
+        NO_RESTART=1
+        ;;
+      --root)
+        need_arg "$@"
+        ROOT_OVERRIDE="$2"
+        shift
+        ;;
       --yes)
         YES=1
         ;;
@@ -378,6 +391,14 @@ unit_name() {
 }
 
 root_dir() {
+  if [ -n "${ROOT_OVERRIDE:-}" ]; then
+    local script_dir resolved
+    script_dir="$(cd "$(dirname "$0")" && pwd)"
+    resolved="$(cd "$ROOT_OVERRIDE" && pwd)" || die "--root introuvable."
+    [ "$resolved" = "$script_dir" ] || die "--root doit être le dossier qui contient ce script."
+    printf '%s' "$resolved"
+    return
+  fi
   if [ "$MODE" = "server" ]; then
     printf '%s' "$SERVER_ROOT"
   else
@@ -1837,6 +1858,10 @@ update_mode() {
   local name
   name="$(unit_name)"
   systemctl daemon-reload
+  if [ "$NO_RESTART" -eq 1 ]; then
+    say "Code à jour. Le service $name n'a pas été redémarré."
+    return
+  fi
   if systemctl is-active --quiet "$name"; then
     systemctl restart "$name"
     say "Service $name redémarré."

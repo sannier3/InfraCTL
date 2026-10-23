@@ -75,6 +75,7 @@ export interface Store {
   latestUpdateCounts(machineIds: string[]): Promise<UpdateCount[]>;
   latestPackageHits(): Promise<PackageHit[]>;
   latestInstalledResults(): Promise<InstalledResult[]>;
+  latestSurveyResults(): Promise<InstalledResult[]>;
   insertJob(job: JobRecord): Promise<void>;
   findJob(id: string): Promise<JobRecord | null>;
   listJobs(query: JobListQuery): Promise<Page<JobRecord>>;

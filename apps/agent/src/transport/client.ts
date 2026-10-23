@@ -97,6 +97,10 @@ export class ServerClient {
     await this.send("POST", `/api/v1/agent/jobs/${jobId}/fail`, body);
   }
 
+  async updateBundle(): Promise<Uint8Array> {
+    return this.sendBytes("GET", "/api/v1/agent/update-bundle", 60_000);
+  }
+
   private async send(
     method: string,
     path: string,
@@ -140,5 +144,39 @@ export class ServerClient {
       throw new Error(`requête agent refusée (${response.status})`);
     }
     return { status: response.status, body: parsed };
+  }
+
+  private async sendBytes(method: string, path: string, timeoutMs: number): Promise<Uint8Array> {
+    const body = "";
+    const url = new URL(path, this.baseUrl());
+    const parts = splitUrl(url);
+    const timestamp = String(this.now());
+    const nonce = createNonce();
+    const signature = sign(this.config.agent.secret, {
+      method,
+      pathname: parts.pathname,
+      query: parts.query,
+      timestamp,
+      nonce,
+      body,
+    });
+    const response = await this.fetchImpl(url, {
+      method,
+      headers: headerValues({
+        agentId: this.config.agent.id,
+        timestamp,
+        nonce,
+        signature,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (response.status === 404) {
+      throw new Error("le serveur n'a pas de code agent compilé");
+    }
+    if (response.status >= 400 || bytes.byteLength === 0) {
+      throw new Error(`requête agent refusée (${response.status})`);
+    }
+    return bytes;
   }
 }

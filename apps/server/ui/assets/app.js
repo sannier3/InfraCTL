@@ -9,6 +9,7 @@ const NAV = [
   ["/machines", "Machines"],
   ["/updates", "Mises à jour"],
   ["/packages", "Paquets"],
+  ["/services", "Services"],
   ["/jobs", "Travaux"],
   ["/clusters", "Clusters"],
   ["/alerts", "Alertes"],
@@ -47,6 +48,7 @@ const ACTIONS = [
   { name: "apt.refresh", label: "Rafraîchir APT", targets: SHARED_TARGETS, mutating: true },
   { name: "apt.check", label: "Voir les mises à jour", targets: SHARED_TARGETS },
   { name: "apt.packages", label: "Paquets installés", targets: SHARED_TARGETS },
+  { name: "runtime.survey", label: "Ports et Docker", targets: SHARED_TARGETS },
   { name: "apt.upgrade", label: "Mettre à jour", targets: SHARED_TARGETS, mutating: true },
   { name: "systemd.failed", label: "Unités en échec", targets: SHARED_TARGETS },
   { name: "systemd.serviceStatus", label: "État d'une unité", targets: SHARED_TARGETS, unit: true },
@@ -59,6 +61,7 @@ const ACTIONS = [
   { name: "proxmox.host.update", label: "Mise à jour de l'hôte", targets: ["PROXMOX_NODE"], mutating: true },
   { name: "lxc.info", label: "Fiche LXC", targets: ["LXC"] },
   { name: "lxc.resources", label: "Ressources LXC", targets: ["LXC"] },
+  { name: "agent.update", label: "Mettre à jour l'agent", targets: ["PROXMOX_NODE", "VM", "PHYSICAL"], mutating: true, hidden: true },
 ];
 const TERMINAL = new Set(["SUCCESS", "FAILED", "SKIPPED", "INTERRUPTED", "UNKNOWN", "CANCELLED", "REQUIRES_CONFIRMATION"]);
 const TYPE_LABEL = {
@@ -70,6 +73,7 @@ const TYPE_LABEL = {
 let directory = { machines: [], nodes: [], clusters: [] };
 let packageIndex = [];
 let installedIndex = [];
+let serviceView = { ports: [], hosts: [], projects: [] };
 
 window.addEventListener("popstate", () => { void render(); });
 document.addEventListener("click", (event) => {
@@ -126,6 +130,7 @@ async function match(path) {
   if (path === "/machines") return machines();
   if (path === "/updates") return updates();
   if (path === "/packages") return installedPackages();
+  if (path === "/services") return servicesPage();
   const machine = path.match(/^\/machines\/([^/]+)$/);
   if (machine) return machineDetail(decodeURIComponent(machine[1] ?? ""));
   if (path === "/jobs") return jobs();
@@ -160,31 +165,38 @@ async function overview() {
 
 async function agents() {
   const page = await api("/agents", { query: { limit: 100 } });
-  const rows = (page.data ?? []).map((agent) => `<tr>
+  const agents = page.data ?? [];
+  const rows = agents.map((agent) => `<tr>
     <td><strong>${escapeHtml(agent.name)}</strong><div class="muted">${escapeHtml(agent.id)}</div></td>
     <td>${escapeHtml(agent.type)}</td>
     <td>${chip(agent.presence)}</td>
     <td>${escapeHtml(String(agent.maxConcurrency))}</td>
     <td class="muted">${escapeHtml((agent.capabilities ?? []).join(", "))}</td>
-    <td><button class="ghost" type="button" data-agent-config="${escapeHtml(agent.id)}">Configuration</button> <button class="ghost" type="button" data-edit="${escapeHtml(agent.id)}">Régler</button></td>
+    <td><button class="ghost" type="button" data-update-agent="${escapeHtml(agent.id)}">Mettre à jour</button> <button class="ghost" type="button" data-agent-config="${escapeHtml(agent.id)}">Configuration</button> <button class="ghost" type="button" data-edit="${escapeHtml(agent.id)}">Régler</button></td>
   </tr>`).join("");
-  return pageHeading("Agents", "Le bouton Configuration donne le fichier YAML ou la commande d'installation.", `<button class="primary" type="button" data-create-agent>Nouvel agent</button>`)
+  const updateAll = agents.length > 0 ? `<button class="ghost" type="button" data-update-agents="${escapeHtml(agents.map((agent) => agent.id).join(","))}">Tout mettre à jour</button>` : "";
+  return pageHeading("Agents", "Le code de l'agent se met à jour par le script ou depuis ce serveur. La configuration est conservée.", `${updateAll} <button class="primary" type="button" data-create-agent>Nouvel agent</button>`)
     + table(["Nom", "Type", "Présence", "Concurrence", "Capacités", ""], rows || emptyRow(6));
 }
 
 async function machines() {
   const params = new URLSearchParams(location.search);
-  const items = await allPages("/machines", { includeHidden: params.get("includeHidden") ?? "false", type: params.get("type") ?? "", status: params.get("status") ?? "" });
+  const [items, agentsPage] = await Promise.all([
+    allPages("/machines", { includeHidden: params.get("includeHidden") ?? "false", type: params.get("type") ?? "", status: params.get("status") ?? "" }),
+    api("/agents", { query: { limit: 200 } }),
+  ]);
+  const agentNames = new Map((agentsPage.data ?? []).map((agent) => [agent.id, agent.name]));
   const rows = items.map((machine) => `<tr>
     <td><a href="/ui/machines/${encodeURIComponent(machine.id)}"><strong>${escapeHtml(machine.displayName)}</strong></a><div class="muted">${escapeHtml(machine.hostname)}</div></td>
     <td>${escapeHtml(identityOf(machine))}</td>
     <td>${escapeHtml(addressText(machine))}</td>
+    <td>${escapeHtml(machine.agentId ? agentNames.get(machine.agentId) || machine.agentId : "—")}</td>
     <td>${escapeHtml(updateText(machine))}</td>
     <td>${escapeHtml(typeLabel(machine.type))}</td>
     <td>${chip(machine.status)}</td>
   </tr>`).join("");
   return pageHeading("Machines", "Le nombre de mises à jour vient de la dernière recherche.", `<a class="ghost" href="/ui/machines?includeHidden=true">Inclure les masquées</a>`)
-    + searchable("machines", "Nom, IP, type…", table(["Machine", "Identifiant", "IP", "Mises à jour", "Type", "État"], rows || emptyRow(6), { list: "machines" }));
+    + searchable("machines", "Nom, IP, agent…", table(["Machine", "Identifiant", "IP", "Agent", "Mises à jour", "Type", "État"], rows || emptyRow(7), { list: "machines" }));
 }
 
 async function updates() {
@@ -215,6 +227,52 @@ function versionList(versions) {
   if (!versions || versions.length === 0) return "—";
   if (versions.length <= 3) return versions.join(", ");
   return `${versions.length} versions`;
+}
+
+async function servicesPage() {
+  await loadDirectory();
+  serviceView = await servicesCatalog();
+  const portRows = serviceView.ports.map((item, index) => `<tr>
+    <td>${escapeHtml(item.protocol)}</td>
+    <td><button class="text-button" type="button" data-service-port="${index}">${escapeHtml(String(item.port))}</button></td>
+    <td>${escapeHtml(String(item.machineCount))}</td>
+  </tr>`).join("");
+  const hostRows = serviceView.hosts.map((item, index) => `<tr>
+    <td><button class="text-button" type="button" data-service-host="${index}">${escapeHtml(machineName(item.machineId))}</button></td>
+    <td>${item.installed ? (item.active ? "Actif" : "Arrêté") : "Absent"}</td>
+    <td>${item.installed ? (item.enabled ? "Activé" : "Non activé") : "—"}</td>
+    <td>${escapeHtml(containerSummary(item.containers))}</td>
+  </tr>`).join("");
+  const projectRows = serviceView.projects.map((item) => `<tr>
+    <td>${escapeHtml(machineName(item.machineId))}</td>
+    <td><code>${escapeHtml(item.directory)}</code><div class="muted">${escapeHtml(item.file)}</div></td>
+    <td>${item.active ? "Actif" : "À démarrer"}</td>
+    <td>${escapeHtml(`${item.running}/${item.services}`)}</td>
+  </tr>`).join("");
+  return pageHeading("Services", "Ports en écoute, moteur Docker et projets Compose trouvés dans /opt. Le relevé ne démarre rien.", `<button class="primary" type="button" data-collect-runtime>Relever</button>`)
+    + `<section class="section"><h2>Ports</h2>${searchable("service-ports", "Port…", table(["Protocole", "Port", "Machines"], portRows || emptyRow(3), { list: "service-ports", sort: { index: 2, dir: "desc" } }))}</section>`
+    + `<section class="section"><h2>Docker</h2>${searchable("service-docker", "Machine…", table(["Machine", "Moteur", "Démarrage", "Conteneurs"], hostRows || emptyRow(4), { list: "service-docker" }))}</section>`
+    + `<section class="section"><h2>Projets Compose</h2>${searchable("service-compose", "Dossier…", table(["Machine", "Projet", "État", "Services"], projectRows || emptyRow(4), { list: "service-compose" }))}</section>`;
+}
+
+function containerSummary(containers) {
+  if (!containers || containers.length === 0) return "—";
+  const running = containers.filter((item) => item.state === "running" || item.state === "restarting").length;
+  return `${running}/${containers.length}`;
+}
+
+async function servicesCatalog() {
+  try {
+    const page = await api("/services");
+    return page.data ?? { ports: [], hosts: [], projects: [] };
+  } catch (error) {
+    if (!(error instanceof Error) || error.status !== 404) throw error;
+    return { ports: [], hosts: [], projects: [] };
+  }
+}
+
+function machineName(id) {
+  return directory.machines.find((item) => item.id === id)?.displayName || id;
 }
 
 async function installedCatalog() {
@@ -405,6 +463,24 @@ function showSecrets(items) {
   if (items.length === 0) return;
   const rows = items.map((item) => `<label class="field"><span>${escapeHtml(item.label)}</span><input readonly value="${escapeHtml(item.value)}" /></label>`).join("");
   openDialog("Secret à recopier", `<p>Cette valeur ne sera plus affichée.</p>${rows}<div class="actions"><button class="ghost" type="button" data-copy-secret>Copier</button><button class="primary" type="button" data-close>Fermer</button></div>`);
+}
+
+function openAgentUpdateDialog(ids) {
+  openDialog("Mettre à jour les agents", `<form id="dialog-form" class="form-grid" data-agent-ids="${escapeHtml(ids.join(","))}">
+    <p>La configuration actuelle est conservée. Le service redémarre à la fin. L'agent doit déjà connaître cette action.</p>
+    <label class="field"><input type="radio" name="mode" value="script" checked /> Via le script</label>
+    <p class="muted">La machine récupère le dépôt git et reconstruit l'agent.</p>
+    <label class="field"><input type="radio" name="mode" value="server" /> Depuis ce serveur</label>
+    <p class="muted">L'agent télécharge le code déjà construit sur ce serveur. Utile quand la machine n'atteint pas le dépôt.</p>
+    <div class="actions"><button class="ghost" type="button" data-close>Fermer</button><button class="primary" type="submit">Lancer</button></div>
+  </form>`, async (form) => {
+    const mode = form.querySelector('input[name="mode"]:checked');
+    const chosen = mode instanceof HTMLInputElement ? mode.value : "";
+    if (chosen !== "script" && chosen !== "server") throw new Error("Choisir un mode");
+    const selected = (form.dataset.agentIds ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+    if (selected.length === 0) throw new Error("Aucun agent à mettre à jour");
+    await launchAction("agent.update", { type: "agents", ids: selected }, { mode: chosen });
+  });
 }
 
 async function showAgentConfig(id) {
@@ -899,6 +975,11 @@ document.addEventListener("click", (event) => {
   if (target.dataset.agentConfig) {
     void showAgentConfig(target.dataset.agentConfig).catch((error) => toast(error instanceof Error ? error.message : "Configuration indisponible"));
   }
+  if (target.dataset.updateAgent || target.dataset.updateAgents) {
+    const ids = (target.dataset.updateAgent || target.dataset.updateAgents || "").split(",").map((id) => id.trim()).filter(Boolean);
+    if (ids.length === 0) toast("Aucun agent à mettre à jour");
+    else openAgentUpdateDialog(ids);
+  }
   if (target.dataset.copyConfig) {
     const text = target.closest(".dialog")?.querySelector(`[data-config-part="${target.dataset.copyConfig}"]`)?.value ?? "";
     const label = target.dataset.copyConfig === "command" ? "Commande copiée" : "Configuration copiée";
@@ -954,6 +1035,11 @@ document.addEventListener("click", (event) => {
   if (target.dataset.collectPackages !== undefined) {
     void launchAction("apt.packages", { type: "fleet" }).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
   }
+  if (target.dataset.collectRuntime !== undefined) {
+    void launchAction("runtime.survey", { type: "fleet" }).catch((error) => toast(error instanceof Error ? error.message : "Action refusée"));
+  }
+  if (target.dataset.servicePort !== undefined) openServicePort(Number(target.dataset.servicePort));
+  if (target.dataset.serviceHost !== undefined) openServiceHost(Number(target.dataset.serviceHost));
   if (target.dataset.action !== undefined) void openActionDialog(target.dataset.machine ?? "", target.dataset.type ?? "");
   if (target.dataset.cancel) void mutate("Annulé", () => api(`/jobs/${target.dataset.cancel}/cancel`, { method: "POST", body: {} }));
   if (target.dataset.ack) void mutate("Acquitté", () => api(`/jobs/${target.dataset.ack}/acknowledge`, { method: "POST", body: {} }));
@@ -1133,6 +1219,20 @@ async function launchNamed(action, machineId) {
   await launchAction(action, selectorFor(machineId));
 }
 
+function openServicePort(index) {
+  const item = serviceView.ports[index];
+  if (!item) return;
+  const rows = item.machines.map((machine) => `<tr><td><a href="/ui/machines/${encodeURIComponent(machine.id)}">${escapeHtml(machineName(machine.id))}</a></td><td>${escapeHtml(machine.address)}</td></tr>`).join("");
+  openDialog(`Port ${item.port}/${item.protocol}`, `${table(["Machine", "Adresse"], rows || emptyRow(2))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
+}
+
+function openServiceHost(index) {
+  const item = serviceView.hosts[index];
+  if (!item) return;
+  const rows = (item.containers ?? []).map((container) => `<tr><td>${escapeHtml(container.name)}</td><td>${escapeHtml(container.image)}</td><td>${escapeHtml(container.state)}</td><td>${escapeHtml(container.ports || "—")}</td></tr>`).join("");
+  openDialog(machineName(item.machineId), `${table(["Conteneur", "Image", "État", "Ports"], rows || emptyRow(4))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
+}
+
 async function showUpdates(machineId) {
   if (!guestScopeOn()) {
     document.querySelector("#updates")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1153,7 +1253,7 @@ async function showUpdates(machineId) {
 async function openActionDialog(machineId, machineType) {
   await loadDirectory();
   const fixed = directory.machines.find((item) => item.id === machineId) ?? null;
-  const options = ACTIONS.filter((action) => !machineType || action.targets.includes(machineType))
+  const options = ACTIONS.filter((action) => !action.hidden && (!machineType || action.targets.includes(machineType)))
     .map((action) => `<option value="${action.name}">${escapeHtml(action.label)}</option>`)
     .join("");
   const online = directory.machines.filter((machine) => machine.status === "RUNNING");

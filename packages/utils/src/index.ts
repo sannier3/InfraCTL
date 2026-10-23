@@ -4,3 +4,5 @@ export type { LogFields, LogLevel, Logger } from "./logger.js";
 export { paginate, paginationMeta } from "./pagination.js";
 export type { Pagination } from "./pagination.js";
 export { REDACTED, isSensitiveKey, redact, scrubString } from "./redact.js";
+export { packTar, unpackTar } from "./tar.js";
+export type { TarFile } from "./tar.js";
