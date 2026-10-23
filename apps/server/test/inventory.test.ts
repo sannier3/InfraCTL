@@ -82,20 +82,35 @@ describe("présence et inventaire", () => {
     expect(alerts.items[0]?.message).toContain("3 guests unavailable");
   });
 
-  it("déplace un guest migré vers le nouveau nœud sans le supprimer", async () => {
+  it("garde deux machines quand deux nœuds annoncent le même VMID", async () => {
     const store = new MemoryStore();
     const inventory = service(store);
     await store.insertAgent({ secretCiphertext: "x", agent: agent("pve01", "proxmox-node") });
     await store.insertAgent({ secretCiphertext: "y", agent: agent("pve03", "proxmox-node") });
-    await inventory.applyInventory("pve01", nodeInventory("pve01", "prod", [{ vmid: 101, guestType: "LXC", name: "ct", status: "running" }]), NOW);
-    const first = await store.findLinkByGuest((await store.findCluster("prod"))!.id, 101);
-    expect(first?.currentNodeId).toBeTruthy();
-    const machineId = first?.machineId;
-    await inventory.applyInventory("pve03", nodeInventory("pve03", "prod", [{ vmid: 101, guestType: "LXC", name: "ct", status: "running" }]), NOW);
-    const moved = await store.findLinkByGuest((await store.findCluster("prod"))!.id, 101);
-    expect(moved?.machineId).toBe(machineId);
-    expect(moved?.currentNodeId).not.toBe(first?.currentNodeId);
-    expect(await store.listAllMachines()).toHaveLength(3);
+    const guests = [
+      { vmid: 112, guestType: "LXC" as const, name: "JBS-SYNOLOGY-VM", status: "running" as const },
+      { vmid: 117, guestType: "LXC" as const, name: "MySql", status: "running" as const },
+    ];
+    await inventory.applyInventory("pve01", nodeInventory("pve", "pve", guests), NOW);
+    await inventory.applyInventory(
+      "pve03",
+      nodeInventory("pve-r730", "pve", [
+        { vmid: 112, guestType: "QEMU", name: "JBS-SYNOLOGY-VM", status: "running" },
+        { vmid: 117, guestType: "LXC", name: "MySql", status: "running" },
+      ]),
+      NOW,
+    );
+    await inventory.applyInventory("pve01", nodeInventory("pve", "pve", guests), NOW);
+    const clusterId = (await store.findCluster("pve"))!.id;
+    const links = await store.findLinksByGuest(clusterId, 112);
+    expect(links).toHaveLength(2);
+    const machines = await Promise.all(links.map((link) => store.findMachine(link.machineId)));
+    expect(new Set(machines.map((item) => item?.type))).toEqual(new Set(["LXC", "VM"]));
+    const mysql = await store.findLinksByGuest(clusterId, 117);
+    expect(mysql).toHaveLength(2);
+    expect(new Set(mysql.map((link) => link.currentNodeId)).size).toBe(2);
+    const again = await store.findLinkByNodeGuest(links[0]!.currentNodeId!, 112);
+    expect(again?.machineId).toBe(links[0]?.machineId);
   });
 
   it("rattache une VM avec agent au VMID d'un nœud et masque la fiche d'inventaire", async () => {

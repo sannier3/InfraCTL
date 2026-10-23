@@ -75,6 +75,8 @@ export const machineResponseSchema = z
       .object({
         vmid: z.number().int().nullable(),
         nodeName: z.string().nullable(),
+        clusterId: z.string().uuid().nullable(),
+        clusterName: z.string().nullable(),
       })
       .strict()
       .nullable(),

@@ -260,17 +260,15 @@ export class MemoryStore implements Store {
   }
 
   async upsertLink(link: LinkRecord): Promise<LinkRecord> {
-    const existing = [...this.links.values()].find(
-      (item) => item.clusterId === link.clusterId && item.vmid === link.vmid,
+    const occupant = [...this.links.values()].find(
+      (item) =>
+        item.machineId !== link.machineId &&
+        item.currentNodeId !== null &&
+        item.currentNodeId === link.currentNodeId &&
+        item.vmid === link.vmid,
     );
-    if (existing) {
-      const next: LinkRecord = {
-        ...existing,
-        currentNodeId: link.currentNodeId,
-        guestType: link.guestType,
-      };
-      this.links.set(existing.machineId, next);
-      return clone(next);
+    if (occupant) {
+      throw new Error("ce VMID est déjà inventorié sur ce nœud");
     }
     this.links.set(link.machineId, clone(link));
     return clone(link);
@@ -290,7 +288,18 @@ export class MemoryStore implements Store {
   }
 
   async findLinkByGuest(clusterId: string, vmid: number): Promise<LinkRecord | null> {
-    const link = [...this.links.values()].find((item) => item.clusterId === clusterId && item.vmid === vmid);
+    const links = await this.findLinksByGuest(clusterId, vmid);
+    return links[0] ?? null;
+  }
+
+  async findLinksByGuest(clusterId: string, vmid: number): Promise<LinkRecord[]> {
+    return [...this.links.values()]
+      .filter((item) => item.clusterId === clusterId && item.vmid === vmid)
+      .map((item) => clone(item));
+  }
+
+  async findLinkByNodeGuest(nodeId: string, vmid: number): Promise<LinkRecord | null> {
+    const link = [...this.links.values()].find((item) => item.currentNodeId === nodeId && item.vmid === vmid);
     return link ? clone(link) : null;
   }
 

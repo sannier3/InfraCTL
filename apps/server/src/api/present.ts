@@ -1,5 +1,5 @@
 import { paginationMeta } from "@infra/utils";
-import type { AgentRecord, JobLogRecord, JobRecord, LinkRecord, MachineRecord, ProxmoxNodeRecord, UpdateCount } from "../database/records.js";
+import type { AgentRecord, ClusterRecord, JobLogRecord, JobRecord, LinkRecord, MachineRecord, ProxmoxNodeRecord, UpdateCount } from "../database/records.js";
 
 export function iso(date: Date | null): string | null {
   return date ? date.toISOString() : null;
@@ -24,7 +24,12 @@ export function presentAgent(agent: AgentRecord) {
   };
 }
 
-export function proxmoxIdentity(machineId: string, links: LinkRecord[], nodes: ProxmoxNodeRecord[]) {
+export function proxmoxIdentity(
+  machineId: string,
+  links: LinkRecord[],
+  nodes: ProxmoxNodeRecord[],
+  clusters: ClusterRecord[] = [],
+) {
   const link = links.find((item) => item.machineId === machineId) ?? null;
   const node = link
     ? (nodes.find((item) => item.id === link.currentNodeId) ?? null)
@@ -32,12 +37,19 @@ export function proxmoxIdentity(machineId: string, links: LinkRecord[], nodes: P
   if (!link && !node) {
     return null;
   }
-  return { vmid: link?.vmid ?? null, nodeName: node?.name ?? null };
+  const clusterId = link?.clusterId ?? node?.clusterId ?? null;
+  const cluster = clusterId ? (clusters.find((item) => item.id === clusterId) ?? null) : null;
+  return {
+    vmid: link?.vmid ?? null,
+    nodeName: node?.name ?? null,
+    clusterId,
+    clusterName: cluster?.name ?? null,
+  };
 }
 
 export function presentMachine(
   machine: MachineRecord,
-  proxmox: { vmid: number | null; nodeName: string | null } | null = null,
+  proxmox: { vmid: number | null; nodeName: string | null; clusterId: string | null; clusterName: string | null } | null = null,
   updates: UpdateCount | null = null,
 ) {
   const details = machine.details;

@@ -609,8 +609,12 @@ export async function buildApp(deps: AppDeps): Promise<{
       return { ...node, createdAt: node.createdAt.toISOString(), updatedAt: node.updatedAt.toISOString() };
     });
     const proxmoxCatalog = async () => {
-      const [links, nodes] = await Promise.all([deps.store.listLinks(), deps.store.listNodes()]);
-      return { links, nodes };
+      const [links, nodes, clusters] = await Promise.all([
+        deps.store.listLinks(),
+        deps.store.listNodes(),
+        deps.store.listClusters(),
+      ]);
+      return { links, nodes, clusters };
     };
     scope.get("/updates", { schema: { response: withErrors(z.object({ data: z.array(fleetPackageSchema) }).strict()) } }, async () => {
       return { data: aggregatePackages(await deps.store.latestPackageHits()) };
@@ -636,7 +640,7 @@ export async function buildApp(deps: AppDeps): Promise<{
       ]);
       const byMachine = new Map(updates.map((item) => [item.machineId, item]));
       return presentPage(page.items, page.total, request.query.page, request.query.limit, (machine) =>
-        presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), byMachine.get(machine.id) ?? null),
+        presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes, index.clusters), byMachine.get(machine.id) ?? null),
       );
     });
     scope.get("/machines/:id", { schema: { params: idParams, response: withErrors(machineResponseSchema) } }, async (request) => {
@@ -648,7 +652,7 @@ export async function buildApp(deps: AppDeps): Promise<{
         proxmoxCatalog(),
         deps.store.latestUpdateCounts([machine.id]),
       ]);
-      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), updates[0] ?? null);
+      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes, index.clusters), updates[0] ?? null);
     });
     scope.post("/machines/:id/proxmox-link", {
       schema: {
@@ -663,7 +667,7 @@ export async function buildApp(deps: AppDeps): Promise<{
         proxmoxCatalog(),
         deps.store.latestUpdateCounts([machine.id]),
       ]);
-      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), updates[0] ?? null);
+      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes, index.clusters), updates[0] ?? null);
     });
     scope.delete("/machines/:id/proxmox-link", { schema: { params: idParams, response: withErrors(machineResponseSchema) } }, async (request) => {
       requireAdmin(request.principal);
@@ -672,7 +676,7 @@ export async function buildApp(deps: AppDeps): Promise<{
         proxmoxCatalog(),
         deps.store.latestUpdateCounts([machine.id]),
       ]);
-      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes), updates[0] ?? null);
+      return presentMachine(machine, proxmoxIdentity(machine.id, index.links, index.nodes, index.clusters), updates[0] ?? null);
     });
     scope.get(
       "/machines/:id/resources",

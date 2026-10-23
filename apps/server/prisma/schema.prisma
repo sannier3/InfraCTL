@@ -186,7 +186,7 @@ model Machine {
   @@index([type])
 }
 
-/// Identité stable d'un guest : clusterId + vmid. Le nœud courant est dynamique.
+/// Identité d'un guest : le VMID est local au nœud. Deux environnements peuvent réutiliser le même numéro.
 model MachineProxmoxLink {
   machineId     String
   clusterId     String
@@ -198,8 +198,8 @@ model MachineProxmoxLink {
   currentNode   ProxmoxNode? @relation("GuestOnNode", fields: [currentNodeId], references: [id], onDelete: SetNull)
 
   @@id([machineId])
-  @@unique([clusterId, vmid])
-  @@index([currentNodeId])
+  @@unique([currentNodeId, vmid])
+  @@index([clusterId, vmid])
 }
 
 model Metric {

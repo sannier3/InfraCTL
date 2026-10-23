@@ -8,7 +8,7 @@ Le formulaire demande un seul mot de passe, celui de `ui.password`. Il n'y a pas
 | --- | --- |
 | Vue d'ensemble | Santé du service et de la base, agents, machines à mettre à jour, travaux récents |
 | Agents | Créer, copier la configuration, mettre à jour le programme, régler la concurrence et les capacités, changer le secret, retirer |
-| Machines | Nom, identifiant Proxmox ou nom d'hôte, adresse, agent responsable, mises à jour, type, état. La fiche détaille les ressources, APT et les travaux |
+| Machines | Nom, nœud Proxmox, identifiant, adresse, agent, mises à jour, type, état. Le filtre Nœuds, aussi présent sur les mises à jour, les paquets, les services, les travaux, les alertes et les clusters, limite l'affichage à un ou plusieurs nœuds. Tous est le choix de départ |
 | Mises à jour | Paquets proposés par la dernière recherche, et les machines concernées |
 | Paquets | Paquets installés. **Relever les paquets** lance la lecture sur le parc |
 | Services | Ports en écoute, état de Docker, projets Compose trouvés dans `/opt`. **Relever** rafraîchit ces listes. Aucun projet n'est démarré |

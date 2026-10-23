@@ -35,6 +35,26 @@ const agentTypeFromDb = {
   linux_node: "linux-node",
 } as const;
 
+export async function ensureNodeScopedGuests(prisma: PrismaClient): Promise<void> {
+  const rows = await prisma.$queryRaw<Array<Record<string, unknown>>>`SHOW INDEX FROM MachineProxmoxLink`;
+  const names = new Set<string>();
+  for (const row of rows) {
+    for (const [key, value] of Object.entries(row)) {
+      if (key.toLowerCase() === "key_name" && typeof value === "string") {
+        names.add(value);
+      }
+    }
+  }
+  if (names.has("MachineProxmoxLink_clusterId_vmid_key")) {
+    await prisma.$executeRawUnsafe("ALTER TABLE `MachineProxmoxLink` DROP INDEX `MachineProxmoxLink_clusterId_vmid_key`");
+  }
+  if (!names.has("MachineProxmoxLink_currentNodeId_vmid_key")) {
+    await prisma.$executeRawUnsafe(
+      "CREATE UNIQUE INDEX `MachineProxmoxLink_currentNodeId_vmid_key` ON `MachineProxmoxLink`(`currentNodeId`, `vmid`)",
+    );
+  }
+}
+
 export class PrismaStore implements Store {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -267,16 +287,24 @@ export class PrismaStore implements Store {
   }
 
   async upsertLink(link: LinkRecord): Promise<LinkRecord> {
-    const existing = await this.prisma.machineProxmoxLink.findUnique({
-      where: { clusterId_vmid: { clusterId: link.clusterId, vmid: link.vmid } },
-    });
-    if (existing) {
-      return this.prisma.machineProxmoxLink.update({
-        where: { machineId: existing.machineId },
-        data: { currentNodeId: link.currentNodeId, guestType: link.guestType },
+    if (link.currentNodeId) {
+      const occupant = await this.prisma.machineProxmoxLink.findFirst({
+        where: { currentNodeId: link.currentNodeId, vmid: link.vmid, NOT: { machineId: link.machineId } },
       });
+      if (occupant) {
+        throw new Error("ce VMID est déjà inventorié sur ce nœud");
+      }
     }
-    return this.prisma.machineProxmoxLink.create({ data: link });
+    return this.prisma.machineProxmoxLink.upsert({
+      where: { machineId: link.machineId },
+      create: link,
+      update: {
+        clusterId: link.clusterId,
+        currentNodeId: link.currentNodeId,
+        vmid: link.vmid,
+        guestType: link.guestType,
+      },
+    });
   }
 
   async deleteLink(machineId: string): Promise<void> {
@@ -292,7 +320,16 @@ export class PrismaStore implements Store {
   }
 
   async findLinkByGuest(clusterId: string, vmid: number): Promise<LinkRecord | null> {
-    return this.prisma.machineProxmoxLink.findUnique({ where: { clusterId_vmid: { clusterId, vmid } } });
+    const links = await this.findLinksByGuest(clusterId, vmid);
+    return links[0] ?? null;
+  }
+
+  async findLinksByGuest(clusterId: string, vmid: number): Promise<LinkRecord[]> {
+    return this.prisma.machineProxmoxLink.findMany({ where: { clusterId, vmid } });
+  }
+
+  async findLinkByNodeGuest(nodeId: string, vmid: number): Promise<LinkRecord | null> {
+    return this.prisma.machineProxmoxLink.findFirst({ where: { currentNodeId: nodeId, vmid } });
   }
 
   async insertMetric(metric: MetricRecord): Promise<void> {

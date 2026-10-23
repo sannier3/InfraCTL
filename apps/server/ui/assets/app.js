@@ -168,6 +168,7 @@ async function overview() {
   ]);
   return `<div class="heading"><div><p class="eyebrow">Salle de contrôle</p><h1 class="title">Vue d'ensemble</h1><p class="subtitle">Le serveur attend les agents. Rien n'est poussé vers eux.</p></div>
     <div class="actions"><button class="primary" type="button" data-action="launch">Lancer une action</button></div></div>
+    ${nodeFilterBar()}
     <section class="grid stagger">
       ${stat("Service", health.status)}${stat("Base", health.database)}
       ${stat("Agents en ligne", String(health.agents?.online ?? 0))}
@@ -175,8 +176,8 @@ async function overview() {
     </section>
     <section class="section split trio">
       <div class="panel">${headingRow("Agents", "/ui/agents")}<div class="table-wrap"><table><thead><tr><th>Nom</th><th>Présence</th><th>Vu</th></tr></thead><tbody>${agentRows(agentsPage.data ?? [])}</tbody></table></div></div>
-      <div class="panel pending">${headingRow("À mettre à jour", "/ui/updates")}<div class="table-wrap"><table><thead><tr><th>Machine</th><th>Paquets</th></tr></thead><tbody>${pendingRows(directory.machines)}</tbody></table></div></div>
-      <div class="panel">${headingRow("Travaux récents", "/ui/jobs")}${jobRows(jobsPage.data ?? [])}</div>
+      <div class="panel pending">${headingRow("À mettre à jour", "/ui/updates")}<div class="table-wrap"><table><thead><tr><th>Machine</th><th>Nœud</th><th>Paquets</th></tr></thead><tbody>${pendingRows(directory.machines)}</tbody></table></div></div>
+      <div class="panel">${headingRow("Travaux récents", "/ui/jobs")}${jobRows((jobsPage.data ?? []).filter(jobOnNode))}</div>
     </section>`;
 }
 
@@ -201,10 +202,12 @@ async function machines() {
   const [items, agents] = await Promise.all([
     allPages("/machines", { includeHidden: params.get("includeHidden") ?? "false", type: params.get("type") ?? "", status: params.get("status") ?? "" }),
     allPages("/agents"),
+    loadDirectory(),
   ]);
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
-  const rows = items.map((machine) => `<tr>
+  const rows = items.filter(machineOnNode).map((machine) => `<tr>
     <td><a href="/ui/machines/${encodeURIComponent(machine.id)}"><strong>${escapeHtml(machine.displayName)}</strong></a><div class="muted">${escapeHtml(machine.hostname)}</div></td>
+    <td>${nodeCell(machine)}</td>
     <td>${escapeHtml(identityOf(machine))}</td>
     <td>${escapeHtml(addressText(machine))}</td>
     <td>${escapeHtml(machine.agentId ? agentNames.get(machine.agentId) || machine.agentId : "—")}</td>
@@ -213,11 +216,13 @@ async function machines() {
     <td>${chip(machine.status)}</td>
   </tr>`).join("");
   return pageHeading("Machines", "Le nombre de mises à jour vient de la dernière recherche.", `<a class="ghost" href="/ui/machines?includeHidden=true">Inclure les masquées</a>`)
-    + searchable("machines", "Nom, IP, agent…", table(["Machine", "Identifiant", "IP", "Agent", "Mises à jour", "Type", "État"], rows || emptyRow(7), { list: "machines" }));
+    + nodeFilterBar()
+    + searchable("machines", "Nom, IP, nœud, agent…", table(["Machine", "Nœud", "Identifiant", "IP", "Agent", "Mises à jour", "Type", "État"], rows || emptyRow(8), { list: "machines" }));
 }
 
 async function updates() {
-  packageIndex = await packageCatalog();
+  const [catalog] = await Promise.all([packageCatalog(), loadDirectory()]);
+  packageIndex = catalog.map(narrowUpdate).filter(Boolean);
   const rows = packageIndex.map((item, index) => `<tr>
     <td><button class="text-button" type="button" data-package="${index}">${escapeHtml(item.name)}</button></td>
     <td>${escapeHtml(String(item.machineCount))}</td>
@@ -226,17 +231,20 @@ async function updates() {
     <td>${escapeHtml(item.changeTypes.join(", ") || "—")}</td>
   </tr>`).join("");
   return pageHeading("Mises à jour", "Dernière recherche de chaque machine. Un clic sur le paquet montre les machines concernées.", "")
+    + nodeFilterBar()
     + searchable("updates", "Nom du paquet…", table(["Paquet", "Machines", "Nouvelle version", "Sécurité", "Changement"], rows || emptyRow(5), { list: "updates", sort: { index: 1, dir: "desc" } }));
 }
 
 async function installedPackages() {
-  installedIndex = await installedCatalog();
+  const [catalog] = await Promise.all([installedCatalog(), loadDirectory()]);
+  installedIndex = catalog.map(narrowInstalled).filter(Boolean);
   const rows = installedIndex.map((item, index) => `<tr>
     <td><button class="text-button" type="button" data-installed="${index}">${escapeHtml(item.name)}</button></td>
     <td>${escapeHtml(String(item.machineCount))}</td>
     <td>${escapeHtml(versionList(item.versions))}</td>
   </tr>`).join("");
   return pageHeading("Paquets", "Paquets installés relevés sur chaque machine. Un clic montre les machines et la version installée.", `<button class="primary" type="button" data-collect-packages>Relever les paquets</button>`)
+    + nodeFilterBar()
     + searchable("packages", "Nom du paquet…", table(["Paquet", "Machines", "Versions"], rows || emptyRow(3), { list: "packages", sort: { index: 1, dir: "desc" } }));
 }
 
@@ -248,28 +256,33 @@ function versionList(versions) {
 
 async function servicesPage() {
   await loadDirectory();
-  serviceView = await servicesCatalog();
+  const survey = await servicesCatalog();
+  serviceView = narrowSurvey(survey);
   const portRows = serviceView.ports.map((item, index) => `<tr>
     <td>${escapeHtml(item.protocol)}</td>
     <td><button class="text-button" type="button" data-service-port="${index}">${escapeHtml(String(item.port))}</button></td>
     <td>${escapeHtml(String(item.machineCount))}</td>
+    <td>${escapeHtml(nodeList(item.machines.map((machine) => machine.id)) || "—")}</td>
   </tr>`).join("");
   const hostRows = serviceView.hosts.map((item, index) => `<tr>
     <td><button class="text-button" type="button" data-service-host="${index}">${escapeHtml(machineName(item.machineId))}</button></td>
+    <td>${nodeCell(machineById(item.machineId))}</td>
     <td>${item.installed ? (item.active ? "Actif" : "Arrêté") : "Absent"}</td>
     <td>${item.installed ? (item.enabled ? "Activé" : "Non activé") : "—"}</td>
     <td>${escapeHtml(containerSummary(item.containers))}</td>
   </tr>`).join("");
   const projectRows = serviceView.projects.map((item) => `<tr>
     <td>${escapeHtml(machineName(item.machineId))}</td>
+    <td>${nodeCell(machineById(item.machineId))}</td>
     <td><code>${escapeHtml(item.directory)}</code><div class="muted">${escapeHtml(item.file)}</div></td>
     <td>${item.active ? "Actif" : "À démarrer"}</td>
     <td>${escapeHtml(`${item.running}/${item.services}`)}</td>
   </tr>`).join("");
   return pageHeading("Services", "Ports en écoute, moteur Docker et projets Compose trouvés dans /opt. Le relevé ne démarre rien.", `<button class="primary" type="button" data-collect-runtime>Relever</button>`)
-    + `<section class="section"><h2>Ports</h2>${searchable("service-ports", "Port…", table(["Protocole", "Port", "Machines"], portRows || emptyRow(3), { list: "service-ports", sort: { index: 2, dir: "desc" } }))}</section>`
-    + `<section class="section"><h2>Docker</h2>${searchable("service-docker", "Machine…", table(["Machine", "Moteur", "Démarrage", "Conteneurs"], hostRows || emptyRow(4), { list: "service-docker" }))}</section>`
-    + `<section class="section"><h2>Projets Compose</h2>${searchable("service-compose", "Dossier…", table(["Machine", "Projet", "État", "Services"], projectRows || emptyRow(4), { list: "service-compose" }))}</section>`;
+    + nodeFilterBar()
+    + `<section class="section"><h2>Ports</h2>${searchable("service-ports", "Port, nœud…", table(["Protocole", "Port", "Machines", "Nœuds"], portRows || emptyRow(4), { list: "service-ports", sort: { index: 2, dir: "desc" } }))}</section>`
+    + `<section class="section"><h2>Docker</h2>${searchable("service-docker", "Machine, nœud…", table(["Machine", "Nœud", "Moteur", "Démarrage", "Conteneurs"], hostRows || emptyRow(5), { list: "service-docker" }))}</section>`
+    + `<section class="section"><h2>Projets Compose</h2>${searchable("service-compose", "Dossier, nœud…", table(["Machine", "Nœud", "Projet", "État", "Services"], projectRows || emptyRow(5), { list: "service-compose" }))}</section>`;
 }
 
 function containerSummary(containers) {
@@ -323,7 +336,7 @@ async function machineDetail(id) {
   return pageHeading(machine.displayName, identityLine(machine), buttons)
     + scope
     + `<section class="grid stagger">${stat("Mises à jour", updateText(machine))}${stat("CPU", current ? `${current.cpuUsage} %` : "—")}${stat("Mémoire", memory)}${stat("Disque", disk)}</section>`
-    + `<section class="section panel facts">${fact("IP", addressText(machine))}${fact("Identifiant", identityOf(machine))}${fact("État", STATUS[machine.status]?.[0] ?? machine.status)}${fact("Agent", machine.agentId ?? "—")}${fact("Système", machine.system?.prettyName || machine.system?.kernel || "—")}${fact("Disponibilité", uptimeText(current?.uptime))}</section>`
+    + `<section class="section panel facts">${fact("IP", addressText(machine))}${fact("Nœud", nodeOf(machine) ? placeLabel(machine) : "—")}${fact("Identifiant", identityOf(machine))}${fact("État", STATUS[machine.status]?.[0] ?? machine.status)}${fact("Agent", machine.agentId ?? "—")}${fact("Système", machine.system?.prettyName || machine.system?.kernel || "—")}${fact("Disponibilité", uptimeText(current?.uptime))}</section>`
     + `<section class="section panel" id="updates"><h2>Mises à jour APT</h2>${snapshot ? table(["Paquet", "Version", "Nouvelle", "Changement"], packages || emptyRow(4)) : `<p class="empty">Aucune recherche terminée. Le bouton « Rechercher les mises à jour » interroge la machine.</p>`}</section>`
     + `<section class="section panel"><h2>Travaux</h2>${jobRows(jobsPage.data ?? [])}</section>`;
 }
@@ -334,8 +347,9 @@ async function jobs() {
     api("/jobs", { query: { limit: 50, page: params.get("page") ?? "1", status: params.get("status") ?? "" } }),
     loadDirectory(),
   ]);
-  return pageHeading("Travaux", "Une action sur plusieurs machines apparaît en une ligne, avec son état. La fiche détaille chaque machine.", `<button class="primary" type="button" data-action>Lancer une action</button>`)
-    + table(["Action", "État", "Cible", "Demandé", ""], jobRows(page.data ?? [], true) || emptyRow(5))
+  return pageHeading("Travaux", "Une action sur plusieurs machines apparaît en une ligne. Un travail de groupe reste dans la liste : sa fiche ne montre que les machines des nœuds choisis.", `<button class="primary" type="button" data-action>Lancer une action</button>`)
+    + nodeFilterBar()
+    + table(["Action", "État", "Cible", "Nœud", "Demandé", ""], jobRows((page.data ?? []).filter(jobOnNode), true) || emptyRow(6))
     + pager(page.pagination, "/ui/jobs");
 }
 
@@ -354,26 +368,33 @@ async function jobDetail(id) {
   if (job.status === "QUEUED" || job.status === "ASSIGNED") buttons.push(`<button class="danger" type="button" data-cancel="${escapeHtml(job.id)}">Annuler</button>`);
   if (["UNKNOWN", "INTERRUPTED", "REQUIRES_CONFIRMATION"].includes(job.status) && !job.acknowledgedAt) buttons.push(`<button class="ghost" type="button" data-ack="${escapeHtml(job.id)}">Acquitter</button>`);
   const logBlocks = (logs.data ?? []).map((line) => `<pre class="log">[${escapeHtml(line.stream)}] ${escapeHtml(line.data)}</pre>`).join("");
-  const childRows = children.map((child) => `<tr><td><a href="/ui/jobs/${encodeURIComponent(child.id)}">${escapeHtml(actionLabel(child.action))}</a></td><td>${chip(child.status)}</td><td>${escapeHtml(jobTarget(child))}</td><td>${escapeHtml(exitText(child, []))}</td><td>${escapeHtml(durationText(child, []))}</td><td>${escapeHtml(agentText(child, []))}</td></tr>`).join("");
+  const childRows = children.filter(jobOnNode).map((child) => `<tr><td><a href="/ui/jobs/${encodeURIComponent(child.id)}">${escapeHtml(actionLabel(child.action))}</a></td><td>${chip(child.status)}</td><td>${escapeHtml(jobTarget(child))}</td><td>${escapeHtml(jobNodeLabel(child))}</td><td>${escapeHtml(exitText(child, []))}</td><td>${escapeHtml(durationText(child, []))}</td><td>${escapeHtml(agentText(child, []))}</td></tr>`).join("");
   return pageHeading(actionLabel(job.action), jobTarget(job), buttons.join(""))
     + `<section class="grid stagger">${stat("État", STATUS[job.status]?.[0] ?? job.status)}${stat("Code", exitText(job, children))}${stat("Durée", durationText(job, children))}${stat("Agent", agentText(job, children))}</section>`
     + `<section class="section panel"><h2>Exécution</h2><p>${escapeHtml(job.resolvedExecutable ?? "Pas encore résolu")} ${escapeHtml(args)}</p>${job.errorMessage ? `<p>${escapeHtml(job.errorCode ?? "")} — ${escapeHtml(job.errorMessage)}</p>` : ""}<pre class="log">${escapeHtml(JSON.stringify(job.result, null, 2) || "Aucun résultat")}</pre></section>`
-    + (job.executionKind === "PARENT" ? `<section class="section panel"><h2>Machines</h2>${table(["Action", "État", "Cible", "Code", "Durée", "Agent"], childRows || emptyRow(6))}</section>` : "")
+    + (job.executionKind === "PARENT" ? `<section class="section panel"><h2>Machines</h2>${nodeFilterBar()}${table(["Action", "État", "Cible", "Nœud", "Code", "Durée", "Agent"], childRows || emptyRow(7))}</section>` : "")
     + `<section class="section"><h2>Journaux</h2>${logBlocks || `<p class="empty">Aucune ligne.</p>`}</section>`;
 }
 
 async function clusters() {
-  const [clusterPage, nodePage] = await Promise.all([api("/clusters", { query: { limit: 100 } }), api("/nodes", { query: { limit: 100 } })]);
+  const [clusterPage, nodePage] = await Promise.all([
+    api("/clusters", { query: { limit: 100 } }),
+    api("/nodes", { query: { limit: 100 } }),
+    loadDirectory(),
+  ]);
   const clusterRows = (clusterPage.data ?? []).map((cluster) => `<tr><td>${escapeHtml(cluster.name)}</td><td>${escapeHtml(cluster.slug)}</td><td>${escapeHtml(cluster.type)}</td></tr>`).join("");
-  const nodeRows = (nodePage.data ?? []).map((node) => `<tr><td>${escapeHtml(node.name)}</td><td>${escapeHtml(node.agentId ?? "—")}</td><td>${escapeHtml(node.version ?? "—")}</td></tr>`).join("");
+  const nodeRows = (nodePage.data ?? []).filter((node) => nodeAllows(`${node.clusterId}/${node.name}`)).map((node) => `<tr><td>${escapeHtml(nodeOptionLabel(node))}</td><td>${escapeHtml(node.agentId ?? "—")}</td><td>${escapeHtml(node.version ?? "—")}</td></tr>`).join("");
   return pageHeading("Clusters", "Ces listes se remplissent avec un inventaire Proxmox. Elles restent vides avec seulement des agents linux-node.", "")
+    + nodeFilterBar()
     + `<section class="split"><div class="panel"><h2>Clusters</h2>${table(["Nom", "Slug", "Type"], clusterRows || emptyRow(3))}</div><div class="panel"><h2>Nœuds</h2>${table(["Nom", "Agent", "Version"], nodeRows || emptyRow(3))}</div></section>`;
 }
 
 async function alerts() {
-  const page = await api("/alerts", { query: { limit: 50 } });
-  const rows = (page.data ?? []).map((alert) => `<tr><td>${chip(alert.severity)}</td><td><strong>${escapeHtml(alert.title)}</strong><div class="muted">${escapeHtml(alert.message)}</div></td><td class="muted">${escapeHtml(formatDate(alert.createdAt))}</td></tr>`).join("");
-  return pageHeading("Alertes", "Ouvertes seulement. Une alerte de nœud offline regroupe ses guests.", "") + table(["Niveau", "Message", "Date"], rows || emptyRow(3));
+  const [page] = await Promise.all([api("/alerts", { query: { limit: 50 } }), loadDirectory()]);
+  const rows = (page.data ?? []).filter(alertOnNode).map((alert) => `<tr><td>${chip(alert.severity)}</td><td><strong>${escapeHtml(alert.title)}</strong><div class="muted">${escapeHtml(alert.message)}</div></td><td>${escapeHtml(alert.machineId ? nodeOf(machineById(alert.machineId)) || "—" : "—")}</td><td class="muted">${escapeHtml(formatDate(alert.createdAt))}</td></tr>`).join("");
+  return pageHeading("Alertes", "Ouvertes seulement. Une alerte de nœud offline regroupe ses guests.", "")
+    + nodeFilterBar()
+    + table(["Niveau", "Message", "Nœud", "Date"], rows || emptyRow(4));
 }
 
 const SETTING_GROUPS = [
@@ -553,6 +574,211 @@ async function loadDirectory() {
   directory = { machines, nodes, clusters };
 }
 
+function readNodeFilter() {
+  try {
+    const raw = localStorage.getItem("infra-node-keys");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((item) => typeof item === "string" && item.length > 0);
+  } catch {
+    return null;
+  }
+}
+
+function writeNodeFilter(names) {
+  try {
+    if (names == null) localStorage.removeItem("infra-node-keys");
+    else localStorage.setItem("infra-node-keys", JSON.stringify(names));
+  } catch {
+    /* le filtre reste valable pour cette page */
+  }
+}
+
+function nodeOf(machine) {
+  if (!machine) return "";
+  const name = machine.proxmox?.nodeName;
+  if (typeof name === "string" && name.trim()) return name.trim();
+  if (machine.type === "PROXMOX_NODE" && machine.hostname) return machine.hostname;
+  return "";
+}
+
+function clusterOfId(clusterId) {
+  if (!clusterId) return null;
+  return directory.clusters.find((item) => item.id === clusterId) ?? null;
+}
+
+function severalClusters() {
+  const ids = new Set();
+  for (const cluster of directory.clusters) if (cluster?.id) ids.add(cluster.id);
+  for (const node of directory.nodes) if (node?.clusterId) ids.add(node.clusterId);
+  return ids.size > 1;
+}
+
+function nodeNameShared(name) {
+  if (!name) return false;
+  const clusters = new Set(directory.nodes.filter((node) => node.name === name).map((node) => node.clusterId));
+  return clusters.size > 1;
+}
+
+function clusterKeyOf(machine) {
+  if (machine.proxmox?.clusterId) return machine.proxmox.clusterId;
+  const name = nodeOf(machine);
+  const matches = directory.nodes.filter((node) => node.name === name);
+  return matches.length === 1 ? matches[0].clusterId : "";
+}
+
+function vmidShared(machine) {
+  const vmid = machine.proxmox?.vmid;
+  if (vmid == null) return false;
+  const own = nodeKey(machine);
+  return directory.machines.some((item) => {
+    if (item.id === machine.id || item.proxmox?.vmid !== vmid) return false;
+    const other = nodeKey(item);
+    return !own || !other || own !== other;
+  });
+}
+
+function nodeKey(machine) {
+  const name = nodeOf(machine);
+  const clusterId = clusterKeyOf(machine);
+  return name && clusterId ? `${clusterId}/${name}` : "";
+}
+
+function placeLabel(machine) {
+  const name = nodeOf(machine);
+  if (!name) return "—";
+  const clusterName = machine.proxmox?.clusterName || clusterOfId(clusterKeyOf(machine))?.name || "";
+  if (clusterName && (severalClusters() || nodeNameShared(name) || vmidShared(machine))) return `${clusterName} / ${name}`;
+  return name;
+}
+
+function nodeOptionLabel(node) {
+  const cluster = clusterOfId(node.clusterId);
+  if (cluster && (nodeNameShared(node.name) || severalClusters())) return `${cluster.name} / ${node.name}`;
+  return node.name;
+}
+
+function samePlace(machine, node) {
+  if (!machine?.proxmox || machine.proxmox.nodeName !== node.name) return false;
+  const clusterId = clusterKeyOf(machine);
+  if (clusterId && node.clusterId) return clusterId === node.clusterId;
+  return !nodeNameShared(node.name);
+}
+
+function nodePlaces() {
+  const places = new Map();
+  for (const node of directory.nodes) {
+    if (!node?.name || !node.clusterId) continue;
+    places.set(`${node.clusterId}/${node.name}`, nodeOptionLabel(node));
+  }
+  for (const machine of directory.machines) {
+    const key = nodeKey(machine);
+    if (key && !places.has(key)) places.set(key, placeLabel(machine));
+  }
+  return [...places.entries()]
+    .map(([key, label]) => ({ key, label }))
+    .sort((left, right) => left.label.localeCompare(right.label, "fr"));
+}
+
+function nodeAllows(key) {
+  const picked = readNodeFilter();
+  if (picked == null) return true;
+  return picked.includes(key);
+}
+
+function machineOnNode(machine) {
+  const picked = readNodeFilter();
+  if (picked == null) return true;
+  const key = nodeKey(machine);
+  return key !== "" && picked.includes(key);
+}
+
+function machineById(id) {
+  return directory.machines.find((item) => item.id === id) ?? null;
+}
+
+function machineIdOnNode(id) {
+  const picked = readNodeFilter();
+  if (picked == null) return true;
+  const machine = machineById(id);
+  return machine ? machineOnNode(machine) : false;
+}
+
+function nodeCell(machine) {
+  return escapeHtml(nodeOf(machine) ? placeLabel(machine) : "—");
+}
+
+function nodeList(ids) {
+  const labels = new Set();
+  for (const id of ids) {
+    const machine = machineById(id);
+    if (machine && nodeOf(machine)) labels.add(placeLabel(machine));
+  }
+  return [...labels].sort((left, right) => left.localeCompare(right, "fr")).join(", ");
+}
+
+function jobOnNode(job) {
+  if (readNodeFilter() == null || !job.machineId) return true;
+  return machineIdOnNode(job.machineId);
+}
+
+function jobNodeLabel(job) {
+  if (!job.machineId) return "—";
+  const machine = machineById(job.machineId);
+  return machine && nodeOf(machine) ? placeLabel(machine) : "—";
+}
+
+function alertOnNode(alert) {
+  if (readNodeFilter() == null || !alert.machineId) return true;
+  return machineIdOnNode(alert.machineId);
+}
+
+function narrowByMachines(item) {
+  if (readNodeFilter() == null) return item;
+  const machines = (item.machines ?? []).filter((entry) => machineIdOnNode(entry.id));
+  if (machines.length === 0) return null;
+  return { ...item, machines, machineCount: machines.length };
+}
+
+function narrowUpdate(item) {
+  const next = narrowByMachines(item);
+  if (!next || next === item) return next;
+  const newVersions = [...new Set(next.machines.map((entry) => entry.newVersion).filter(Boolean))];
+  const changeTypes = [...new Set(next.machines.map((entry) => entry.changeType).filter(Boolean))];
+  return { ...next, newVersions, changeTypes, security: next.machines.some((entry) => entry.security) };
+}
+
+function narrowInstalled(item) {
+  const next = narrowByMachines(item);
+  if (!next || next === item) return next;
+  return { ...next, versions: [...new Set(next.machines.map((entry) => entry.version).filter(Boolean))] };
+}
+
+function narrowSurvey(survey) {
+  if (readNodeFilter() == null) return survey;
+  const ports = (survey.ports ?? []).map((item) => {
+    const machines = (item.machines ?? []).filter((entry) => machineIdOnNode(entry.id));
+    return machines.length > 0 ? { ...item, machines, machineCount: machines.length } : null;
+  }).filter(Boolean);
+  return {
+    ports,
+    hosts: (survey.hosts ?? []).filter((item) => machineIdOnNode(item.machineId)),
+    projects: (survey.projects ?? []).filter((item) => machineIdOnNode(item.machineId)),
+  };
+}
+
+function nodeFilterBar() {
+  const places = nodePlaces();
+  if (places.length === 0) return "";
+  const picked = readNodeFilter();
+  const choices = places.map((place) => {
+    const checked = picked == null || picked.includes(place.key) ? " checked" : "";
+    return `<label class="node-choice"><input type="checkbox" data-node="${escapeHtml(place.key)}"${checked} /> ${escapeHtml(place.label)}</label>`;
+  }).join("");
+  return `<div class="node-filter"><span>Nœuds</span><button class="ghost${picked == null ? " is-on" : ""}" type="button" data-node-all>Tous</button>${choices}</div>`;
+}
+
 async function allPages(path, query = {}) {
   const first = await api(path, { query: { ...query, limit: 100, page: "1" } });
   const items = [...(first.data ?? [])];
@@ -606,21 +832,24 @@ function uptimeText(seconds) {
 }
 
 function identityOf(machine) {
-  if (machine.proxmox?.vmid) return String(machine.proxmox.vmid);
-  if (machine.type === "PROXMOX_NODE") return machine.proxmox?.nodeName || machine.hostname;
+  if (machine.proxmox?.vmid) return vmidShared(machine) ? `${machine.proxmox.vmid} · ${placeLabel(machine)}` : String(machine.proxmox.vmid);
+  if (machine.type === "PROXMOX_NODE") return placeLabel(machine);
   return "—";
 }
 
 function identityLine(machine) {
   const kind = typeLabel(machine.type);
-  if (machine.proxmox?.vmid) return `${kind} · ${machine.proxmox.vmid} · ${machine.hostname}`;
-  if (machine.type === "PROXMOX_NODE") return `${kind} · ${machine.proxmox?.nodeName || machine.hostname}`;
+  if (machine.proxmox?.vmid) return `${kind} · ${identityOf(machine)} · ${machine.hostname}`;
+  if (machine.type === "PROXMOX_NODE") return `${kind} · ${placeLabel(machine)}`;
   return `${kind} · ${machine.hostname}`;
 }
 
 function machineLabel(machine) {
   const kind = typeLabel(machine.type);
-  if (machine.proxmox?.vmid) return `${machine.displayName} · ${kind} · ${machine.proxmox.vmid}`;
+  if (machine.proxmox?.vmid) {
+    const place = vmidShared(machine) ? ` · ${placeLabel(machine)}` : "";
+    return `${machine.displayName} · ${kind} · ${machine.proxmox.vmid}${place}`;
+  }
   return `${machine.displayName} · ${kind}`;
 }
 
@@ -703,9 +932,9 @@ function countPhrase(status, count) {
 }
 
 function guestsOf(machine) {
-  const nodeName = machine.proxmox?.nodeName;
-  if (!nodeName) return [];
-  return directory.machines.filter((item) => item.id !== machine.id && item.proxmox?.nodeName === nodeName && item.proxmox?.vmid != null);
+  const key = nodeKey(machine);
+  if (!key) return [];
+  return directory.machines.filter((item) => item.id !== machine.id && nodeKey(item) === key && item.proxmox?.vmid != null);
 }
 
 function guestScopeOn() {
@@ -742,9 +971,9 @@ function chip(value) {
 }
 function pendingRows(machines) {
   const pending = machines
-    .filter((machine) => !machine.hiddenAt && machine.updates && machine.updates.availableCount > 0)
+    .filter((machine) => machineOnNode(machine) && !machine.hiddenAt && machine.updates && machine.updates.availableCount > 0)
     .sort((left, right) => right.updates.availableCount - left.updates.availableCount || left.displayName.localeCompare(right.displayName, "fr"));
-  return pending.map((machine) => `<tr><td><a href="/ui/machines/${encodeURIComponent(machine.id)}"><strong>${escapeHtml(machine.displayName)}</strong></a><div class="muted">${escapeHtml(typeLabel(machine.type))}</div></td><td>${escapeHtml(updateText(machine))}</td></tr>`).join("") || emptyRow(2);
+  return pending.map((machine) => `<tr><td><a href="/ui/machines/${encodeURIComponent(machine.id)}"><strong>${escapeHtml(machine.displayName)}</strong></a><div class="muted">${escapeHtml(typeLabel(machine.type))}</div></td><td>${nodeCell(machine)}</td><td>${escapeHtml(updateText(machine))}</td></tr>`).join("") || emptyRow(3);
 }
 function agentRows(items) {
   return items.map((agent) => `<tr><td>${escapeHtml(agent.name)}</td><td>${chip(agent.presence)}</td><td class="muted">${escapeHtml(formatDate(agent.lastSeenAt))}</td></tr>`).join("") || emptyRow(3);
@@ -752,9 +981,9 @@ function agentRows(items) {
 function jobRows(items, raw = false) {
   const rows = items.map((job) => {
     const progress = job.executionKind === "PARENT" ? groupFacts(job).text : "";
-    return `<tr><td><a href="/ui/jobs/${encodeURIComponent(job.id)}">${escapeHtml(actionLabel(job.action))}</a></td><td>${chip(job.status)}</td><td>${escapeHtml(jobTarget(job))}${progress ? `<div class="muted">${escapeHtml(progress)}</div>` : ""}</td><td class="muted">${escapeHtml(formatDate(job.createdAt))}</td>${raw ? `<td>${escapeHtml(job.requestedBy ?? "")}</td>` : ""}</tr>`;
+    return `<tr><td><a href="/ui/jobs/${encodeURIComponent(job.id)}">${escapeHtml(actionLabel(job.action))}</a></td><td>${chip(job.status)}</td><td>${escapeHtml(jobTarget(job))}${progress ? `<div class="muted">${escapeHtml(progress)}</div>` : ""}</td><td>${escapeHtml(jobNodeLabel(job))}</td><td class="muted">${escapeHtml(formatDate(job.createdAt))}</td>${raw ? `<td>${escapeHtml(job.requestedBy ?? "")}</td>` : ""}</tr>`;
   }).join("");
-  return raw ? rows : `<div class="table-wrap"><table><thead><tr><th>Action</th><th>État</th><th>Cible</th><th>Date</th></tr></thead><tbody>${rows || emptyRow(4)}</tbody></table></div>`;
+  return raw ? rows : `<div class="table-wrap"><table><thead><tr><th>Action</th><th>État</th><th>Cible</th><th>Nœud</th><th>Date</th></tr></thead><tbody>${rows || emptyRow(5)}</tbody></table></div>`;
 }
 function pager(pagination, base) {
   if (!pagination || pagination.pages <= 1) return "";
@@ -963,6 +1192,20 @@ document.addEventListener("submit", (event) => {
 document.addEventListener("change", (event) => {
   const select = event.target;
   if (select instanceof HTMLSelectElement && select.id === "settings-agent") void showAgentSettings(select.value);
+  const box = event.target;
+  if (box instanceof HTMLInputElement && box.dataset.node !== undefined) {
+    const names = [...document.querySelectorAll("input[data-node]")].flatMap((item) => item instanceof HTMLInputElement && item.checked && item.dataset.node ? [item.dataset.node] : []);
+    const all = nodePlaces().map((place) => place.key);
+    writeNodeFilter(names.length === all.length ? null : names);
+    void render();
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest("[data-node-all]") : null;
+  if (!button) return;
+  writeNodeFilter(null);
+  void render();
 });
 
 document.addEventListener("input", (event) => {
@@ -1135,11 +1378,11 @@ async function openPackageDialog(index) {
   const rows = known.map(({ entry, machine }) => {
     const label = machine ? machineLabel(machine) : entry.id;
     const name = machine ? `<a href="/ui/machines/${encodeURIComponent(machine.id)}">${escapeHtml(label)}</a>` : escapeHtml(label);
-    return `<tr><td>${name}</td><td>${escapeHtml(machine ? typeLabel(machine.type) : "—")}</td><td>${escapeHtml(versionStep(entry))}</td><td>${machine ? chip(machine.status) : "—"}</td></tr>`;
+    return `<tr><td>${name}</td><td>${nodeCell(machine)}</td><td>${escapeHtml(machine ? typeLabel(machine.type) : "—")}</td><td>${escapeHtml(versionStep(entry))}</td><td>${machine ? chip(machine.status) : "—"}</td></tr>`;
   }).join("");
   const aside = running.length === known.length ? "" : `<p class="muted">L'installation porte sur les ${running.length} machine${running.length > 1 ? "s" : ""} en marche.</p>`;
   const button = running.length > 0 ? `<button class="primary" type="submit">${running.length === known.length ? "Mettre à jour ces machines" : "Mettre à jour les machines en marche"}</button>` : "";
-  openDialog(item.name, `<p class="muted">${known.length} machine${known.length > 1 ? "s" : ""} concernée${known.length > 1 ? "s" : ""}.</p>${table(["Machine", "Type", "Version", "État"], rows || emptyRow(4))}<form id="dialog-form"><p>Installe les mises à jour APT des machines en marche de cette liste. Une simulation est refaite avant. Si un paquet doit être supprimé, cette machine est laissée de côté.</p>${aside}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button>${button}</div></form>`, async () => {
+  openDialog(item.name, `<p class="muted">${known.length} machine${known.length > 1 ? "s" : ""} concernée${known.length > 1 ? "s" : ""}.</p>${table(["Machine", "Nœud", "Type", "Version", "État"], rows || emptyRow(5))}<form id="dialog-form"><p>Installe les mises à jour APT des machines en marche de cette liste. Une simulation est refaite avant. Si un paquet doit être supprimé, cette machine est laissée de côté.</p>${aside}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button>${button}</div></form>`, async () => {
     if (running.length === 0) throw new Error("Aucune machine en marche pour ce paquet");
     if (running.length > 500) throw new Error("Trop de machines pour une seule action");
     await launchAction("apt.upgrade", { type: "machines", ids: running });
@@ -1158,9 +1401,9 @@ async function openInstalledDialog(index) {
   const rows = known.map(({ entry, machine }) => {
     const label = machine ? machineLabel(machine) : entry.id;
     const name = machine ? `<a href="/ui/machines/${encodeURIComponent(machine.id)}">${escapeHtml(label)}</a>` : escapeHtml(label);
-    return `<tr><td>${name}</td><td>${escapeHtml(machine ? typeLabel(machine.type) : "—")}</td><td>${escapeHtml(entry.version || "—")}</td><td>${machine ? chip(machine.status) : "—"}</td></tr>`;
+    return `<tr><td>${name}</td><td>${nodeCell(machine)}</td><td>${escapeHtml(machine ? typeLabel(machine.type) : "—")}</td><td>${escapeHtml(entry.version || "—")}</td><td>${machine ? chip(machine.status) : "—"}</td></tr>`;
   }).join("");
-  openDialog(item.name, `<p class="muted">${known.length} machine${known.length > 1 ? "s" : ""}.</p>${table(["Machine", "Type", "Version", "État"], rows || emptyRow(4))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
+  openDialog(item.name, `<p class="muted">${known.length} machine${known.length > 1 ? "s" : ""}.</p>${table(["Machine", "Nœud", "Type", "Version", "État"], rows || emptyRow(5))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
 }
 
 function versionStep(entry) {
@@ -1177,7 +1420,7 @@ async function openLinkDialog(machineId) {
     toast("Aucun nœud Proxmox n'est inventorié.");
     return;
   }
-  const nodeOptions = nodes.map((node) => `<option value="${escapeHtml(node.id)}" ${machine?.proxmox?.nodeName === node.name ? "selected" : ""}>${escapeHtml(node.name)}</option>`).join("");
+  const nodeOptions = nodes.map((node) => `<option value="${escapeHtml(node.id)}" ${samePlace(machine, node) ? "selected" : ""}>${escapeHtml(nodeOptionLabel(node))}</option>`).join("");
   openDialog("Lier au Proxmox", `<form id="dialog-form" class="form-grid">
     <p>Rattache cette VM à un VMID du nœud. Les actions du nœud la reconnaissent ensuite.</p>
     <div class="field"><label>Nœud</label><select name="nodeId">${nodeOptions}</select></div>
@@ -1200,9 +1443,9 @@ async function openLinkDialog(machineId) {
     const known = form.elements.namedItem("knownVmid");
     const input = form.elements.namedItem("vmid");
     if (!(known instanceof HTMLSelectElement) || !(input instanceof HTMLInputElement) || !node) return;
-    const guests = directory.machines.filter((item) => item.type === "VM" && item.proxmox?.nodeName === node.name && item.proxmox?.vmid != null);
+    const guests = directory.machines.filter((item) => item.type === "VM" && samePlace(item, node) && item.proxmox?.vmid != null);
     known.innerHTML = `<option value="">Saisir un VMID</option>${guests.map((item) => `<option value="${item.proxmox.vmid}">${escapeHtml(String(item.proxmox.vmid))} · ${escapeHtml(item.displayName)}</option>`).join("")}`;
-    const current = machine?.proxmox?.nodeName === node.name ? machine.proxmox?.vmid : null;
+    const current = samePlace(machine, node) ? machine.proxmox?.vmid : null;
     if (current) {
       known.value = String(current);
       input.value = String(current);
@@ -1239,8 +1482,8 @@ async function launchNamed(action, machineId) {
 function openServicePort(index) {
   const item = serviceView.ports[index];
   if (!item) return;
-  const rows = item.machines.map((machine) => `<tr><td><a href="/ui/machines/${encodeURIComponent(machine.id)}">${escapeHtml(machineName(machine.id))}</a></td><td>${escapeHtml(machine.address)}</td></tr>`).join("");
-  openDialog(`Port ${item.port}/${item.protocol}`, `${table(["Machine", "Adresse"], rows || emptyRow(2))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
+  const rows = item.machines.map((machine) => `<tr><td><a href="/ui/machines/${encodeURIComponent(machine.id)}">${escapeHtml(machineName(machine.id))}</a></td><td>${nodeCell(machineById(machine.id))}</td><td>${escapeHtml(machine.address)}</td></tr>`).join("");
+  openDialog(`Port ${item.port}/${item.protocol}`, `${table(["Machine", "Nœud", "Adresse"], rows || emptyRow(3))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
 }
 
 function openServiceHost(index) {
@@ -1262,9 +1505,9 @@ async function showUpdates(machineId) {
     const updates = await api(`/machines/${encodeURIComponent(item.id)}/updates`, { query: { limit: 1 } });
     return { item, snapshot: updates.data?.[0] ?? null };
   }));
-  const body = rows.map(({ item, snapshot }) => `<tr><td><a href="/ui/machines/${encodeURIComponent(item.id)}">${escapeHtml(machineLabel(item))}</a></td><td>${snapshot ? escapeHtml(String(snapshot.availableCount)) : "—"}</td><td>${snapshot?.requiresReboot ? "Oui" : "—"}</td></tr>`).join("");
+  const body = rows.map(({ item, snapshot }) => `<tr><td><a href="/ui/machines/${encodeURIComponent(item.id)}">${escapeHtml(machineLabel(item))}</a></td><td>${nodeCell(item)}</td><td>${snapshot ? escapeHtml(String(snapshot.availableCount)) : "—"}</td><td>${snapshot?.requiresReboot ? "Oui" : "—"}</td></tr>`).join("");
   const note = targets.length <= 1 ? `<p class="muted">Aucun invité n'est encore rattaché à ce nœud.</p>` : "";
-  openDialog("Mises à jour", `${note}${table(["Machine", "Paquets", "Redémarrage"], body || emptyRow(3))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
+  openDialog("Mises à jour", `${note}${table(["Machine", "Nœud", "Paquets", "Redémarrage"], body || emptyRow(4))}<div class="actions"><button class="ghost" type="button" data-close>Fermer</button></div>`);
 }
 
 async function openActionDialog(machineId, machineType) {
@@ -1275,7 +1518,7 @@ async function openActionDialog(machineId, machineType) {
     .join("");
   const online = directory.machines.filter((machine) => machine.status === "RUNNING");
   const machineOptions = online.map((machine) => `<option value="${escapeHtml(machine.id)}" ${machine.id === machineId ? "selected" : ""}>${escapeHtml(machineLabel(machine))}</option>`).join("");
-  const nodeOptions = directory.nodes.filter((node) => online.some((machine) => machine.id === node.machineId)).map((node) => `<option value="${escapeHtml(node.machineId)}">${escapeHtml(node.name)}</option>`).join("");
+  const nodeOptions = directory.nodes.filter((node) => online.some((machine) => machine.id === node.machineId)).map((node) => `<option value="${escapeHtml(node.machineId)}">${escapeHtml(nodeOptionLabel(node))}</option>`).join("");
   const clusterOptions = directory.clusters.map((cluster) => `<option value="${escapeHtml(cluster.id)}">${escapeHtml(cluster.name)}</option>`).join("");
   const picks = online.map((machine) => `<label><input type="checkbox" name="machinePick" value="${escapeHtml(machine.id)}" /> ${escapeHtml(machineLabel(machine))}</label>`).join("");
   const targetFields = fixed

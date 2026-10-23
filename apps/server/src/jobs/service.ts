@@ -511,9 +511,12 @@ export class JobService {
       this.store.listLinks(),
       this.store.listAllMachines(),
     ]);
-    const node = nodes.find(
-      (item) => item.id === selector.id || item.name === selector.id || item.machineId === selector.id,
-    );
+    const byIdentity = nodes.filter((item) => item.id === selector.id || item.machineId === selector.id);
+    const matches = byIdentity.length > 0 ? byIdentity : nodes.filter((item) => item.name === selector.id);
+    if (matches.length > 1) {
+      throw new AppError(409, ERROR_CODES.CONFLICT, "plusieurs nœuds portent ce nom ; précisez l'identifiant du nœud");
+    }
+    const node = matches[0];
     if (!node) {
       throw new AppError(404, ERROR_CODES.NOT_FOUND, "nœud Proxmox introuvable");
     }

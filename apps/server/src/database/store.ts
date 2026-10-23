@@ -66,6 +66,8 @@ export interface Store {
   listLinks(): Promise<LinkRecord[]>;
   findLinkByMachine(machineId: string): Promise<LinkRecord | null>;
   findLinkByGuest(clusterId: string, vmid: number): Promise<LinkRecord | null>;
+  findLinksByGuest(clusterId: string, vmid: number): Promise<LinkRecord[]>;
+  findLinkByNodeGuest(nodeId: string, vmid: number): Promise<LinkRecord | null>;
   insertMetric(metric: MetricRecord): Promise<void>;
   listMetrics(machineId: string, query: PageQuery): Promise<Page<MetricRecord>>;
   latestMetric(machineId: string): Promise<MetricRecord | null>;

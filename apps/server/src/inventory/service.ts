@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HeartbeatBody, InventoryBody, ResourcesBody } from "@infra/schemas";
 import { ERROR_CODES, type MachineStatus, type MachineType } from "@infra/types";
-import type { AgentRecord, AlertRecord, MachineRecord, ProxmoxNodeRecord } from "../database/records.js";
+import type { AgentRecord, AlertRecord, LinkRecord, MachineRecord, ProxmoxNodeRecord } from "../database/records.js";
 import type { Store } from "../database/store.js";
 import { AppError } from "../errors.js";
 import type { Mutex } from "../lock.js";
@@ -119,7 +119,7 @@ export class InventoryService {
     if (!node) {
       throw new AppError(404, ERROR_CODES.NOT_FOUND, "nœud Proxmox introuvable");
     }
-    const guest = await this.store.findLinkByGuest(node.clusterId, vmid);
+    const guest = await this.store.findLinkByNodeGuest(node.id, vmid);
     if (guest?.guestType === "LXC") {
       throw new AppError(422, ERROR_CODES.INCOMPATIBLE_TARGET, "ce VMID est un conteneur LXC");
     }
@@ -189,10 +189,8 @@ export class InventoryService {
     if (body.proxmox) {
       const cluster = await this.ensureCluster(body.proxmox.clusterId, now);
       clusterId = cluster.id;
-      const link = await this.store.findLinkByGuest(cluster.id, body.proxmox.vmid);
-      if (link) {
-        existing = await this.store.findMachine(link.machineId);
-      }
+      const links = await this.store.findLinksByGuest(cluster.id, body.proxmox.vmid);
+      existing = await this.matchLinuxGuest(links, agent.id, body.hostname, body.displayName ?? body.hostname);
     }
     existing ??= await this.store.findMachineByAgent(agent.id);
     const machine = await this.saveMachine(existing, {
@@ -206,7 +204,7 @@ export class InventoryService {
       details: detailsFrom(body, existing?.details ?? null),
     });
     if (body.proxmox && clusterId) {
-      const current = await this.store.findLinkByGuest(clusterId, body.proxmox.vmid);
+      const current = await this.store.findLinkByMachine(machine.id);
       await this.store.upsertLink({
         machineId: machine.id,
         clusterId,
@@ -280,14 +278,14 @@ export class InventoryService {
     guest: NonNullable<InventoryBody["guests"]>[number],
     now: Date,
   ): Promise<void> {
-    const link = await this.store.findLinkByGuest(clusterId, guest.vmid);
+    const link = await this.store.findLinkByNodeGuest(node.id, guest.vmid);
     const existing = link ? await this.store.findMachine(link.machineId) : null;
     const type: MachineType = guest.guestType === "LXC" ? "LXC" : "VM";
     const status: MachineStatus = guest.status === "running" ? "RUNNING" : "STOPPED";
     const machine = await this.saveMachine(existing, {
       agentId: existing?.agentId ?? null,
       hostname: existing?.agentId ? existing.hostname : guest.name,
-      displayName: existing?.displayName ?? guest.name,
+      displayName: existing?.agentId ? existing.displayName : guest.name,
       type,
       status,
       metricsSource: existing?.agentId ? existing.metricsSource : "PROXMOX",
@@ -512,6 +510,35 @@ export class InventoryService {
       updatedAt: now,
     };
     await this.store.upsertAlert(alert);
+  }
+
+  private async matchLinuxGuest(
+    links: LinkRecord[],
+    agentId: string,
+    hostname: string,
+    displayName: string,
+  ): Promise<MachineRecord | null> {
+    const machines: MachineRecord[] = [];
+    for (const link of links) {
+      const machine = await this.store.findMachine(link.machineId);
+      if (machine) {
+        machines.push(machine);
+      }
+    }
+    const own = machines.find((machine) => machine.agentId === agentId);
+    if (own) {
+      return own;
+    }
+    const named = machines.filter(
+      (machine) => machine.hostname === hostname || machine.displayName === displayName || machine.displayName === hostname,
+    );
+    if (named.length === 1) {
+      return named[0] ?? null;
+    }
+    if (machines.length === 1) {
+      return machines[0] ?? null;
+    }
+    return null;
   }
 
   private async ensureCluster(slug: string, now: Date) {

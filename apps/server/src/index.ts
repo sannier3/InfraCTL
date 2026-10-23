@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { buildApp } from "./api/app.js";
 import { loadServerConfig, resolveServerConfigPath } from "./config/load.js";
-import { PrismaStore } from "./database/prisma-store.js";
+import { ensureNodeScopedGuests, PrismaStore } from "./database/prisma-store.js";
 
 const configPath = resolveServerConfigPath();
 
@@ -16,6 +16,7 @@ try {
 
 process.env.DATABASE_URL = config.database.url;
 const prisma = new PrismaClient();
+await ensureNodeScopedGuests(prisma);
 const store = new PrismaStore(prisma);
 const built = await buildApp({ config, store, startScheduler: true, configPath });
 
