@@ -440,6 +440,7 @@ confirm() {
 install_apt() {
   command -v apt-get >/dev/null 2>&1 || die "Ce script cible Debian ou Ubuntu, avec apt-get."
   export DEBIAN_FRONTEND=noninteractive
+  export NEEDRESTART_MODE=l
   apt-get update
   apt-get install -y ca-certificates curl wget git gnupg openssl sudo
 }
@@ -505,6 +506,15 @@ build_tree() {
   local dest="$1"
   say "Installation des dépendances et construction."
   pnpm_run "$dest" install --frozen-lockfile
+  if [ "$MODE" = "agent" ]; then
+    say "Construction de l'agent."
+    pnpm_run "$dest" -r --filter "./packages/*" build
+    pnpm_run "$dest" --filter "@infra/agent" build
+    return
+  fi
+  say "Génération du client Prisma, puis construction du serveur."
+  env -u NODE_ENV DATABASE_URL="mysql://prisma:prisma@127.0.0.1:3306/prisma" \
+    pnpm --dir "$dest/apps/server" exec prisma generate
   pnpm_run "$dest" build
 }
 
