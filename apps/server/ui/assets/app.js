@@ -1,3 +1,8 @@
+import { applyTheme, cycleTheme, themeButtonLabel, watchSystemTheme } from "./theme.js";
+
+applyTheme();
+watchSystemTheme();
+
 const app = document.querySelector("#app");
 let generation = 0;
 let toastTimer = 0;
@@ -119,14 +124,19 @@ function shell(content, calm) {
     <aside class="rail">
       <div class="brand"><strong>Infra</strong><span>Maintenance contrôlée</span></div>
       <nav class="nav">${links}</nav>
-      <div class="rail-foot"><button class="ghost" type="button" id="logout">Fermer la session</button></div>
+      <div class="rail-foot"><button class="ghost theme-toggle" type="button" id="theme">${escapeHtml(themeButtonLabel())}</button><button class="ghost" type="button" id="logout">Fermer la session</button></div>
     </aside>
     <main class="main view${calm ? " calm" : ""}">${content}</main>
   </div>`;
 }
 
 document.addEventListener("click", (event) => {
-  if (event.target instanceof HTMLElement && event.target.id === "logout") {
+  if (!(event.target instanceof HTMLElement)) return;
+  if (event.target.id === "theme") {
+    cycleTheme();
+    event.target.textContent = themeButtonLabel();
+  }
+  if (event.target.id === "logout") {
     void logout();
   }
 });

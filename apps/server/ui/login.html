@@ -5,9 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
     <title>Infra Manager</title>
+    <script>
+      (function () {
+        try {
+          var choice = localStorage.getItem("infra-theme");
+          var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var theme = choice === "dark" || (choice !== "light" && dark) ? "dark" : "light";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.themeChoice = choice === "light" || choice === "dark" ? choice : "system";
+        } catch (error) { /* le système décide */ }
+      })();
+    </script>
     <link rel="stylesheet" href="/ui/assets/app.css" />
   </head>
   <body class="gate-body">
+    <button class="ghost theme-toggle" type="button" id="theme">Design · Système</button>
     <main class="gate">
       <p class="eyebrow">Infra Manager</p>
       <h1>Ouvrir la salle de contrôle</h1>

@@ -8,7 +8,7 @@ Ce fichier est le résumé stable du dépôt. Le détail d'usage est dans [docs/
 
 ## État actuel
 
-Version de socle, avec une interface interne en plus de l'API.
+Le guide d'installation est le [README](../README.md).
 
 Présent et exécutable :
 
@@ -17,12 +17,11 @@ Présent et exécutable :
 - agents `linux-node` et `proxmox-node` sous systemd, connexions uniquement sortantes ;
 - authentification HMAC des agents, jetons Bearer pour l'API de gestion ;
 - heartbeat, inventaire, métriques locales, long polling, file de jobs persistée ;
-- actions du catalogue toutes activées, LXC via `pct exec` depuis le nœud ;
+- actions du catalogue activées, LXC via `pct exec` depuis le nœud ;
+- inventaire Proxmox, identité `clusterId` + `vmid`, invités `UNKNOWN` si le nœud est hors ligne ;
+- relevé des ports, de Docker et des fichiers Compose dans `/opt`, sans les démarrer ;
+- mise à jour de l'agent par le script ou par le code compilé du serveur ;
 - journaux, audit `executable` + `arguments`, concurrence, jobs parents.
-
-Présent dans le modèle, non exécuté :
-
-- fusion d'inventaire Proxmox, identité `clusterId` + `vmid`, guests `UNKNOWN` si le nœud est offline.
 
 L'interface humaine est sur `/ui`. Elle est protégée par `ui.password` dans la configuration du serveur, pas par un compte. Le jeton Bearer reste le moyen d'appel pour une page PHP. `GET /docs` est la documentation OpenAPI quand `exposeSwagger` vaut `true`. Le guide PHP est [php.md](php.md), l'interface est décrite dans [interface.md](interface.md).
 
@@ -68,7 +67,7 @@ Commandes : `pnpm install`, `docker compose up -d`, `pnpm prisma:migrate`, `pnpm
 
 Deux secrets distincts.
 
-L'API de gestion utilise `Authorization: Bearer`. `auth.apiToken` est l'administrateur. `auth.readToken`, optionnel, lit et ne lance que les actions `READ`. `GET /api/v1/health` est public. Il n'y a pas de compte ni de mot de passe.
+L'API de gestion utilise `Authorization: Bearer`. `auth.apiToken` est l'administrateur. `auth.readToken`, optionnel, lit et ne lance que les actions `READ`. `GET /api/v1/health` est public. Cette API n'a pas de compte : le mot de passe de `ui.password` ouvre seulement le site.
 
 L'agent signe `POST` et `GET` sous `/api/v1/agent/` en HMAC-SHA256. En-têtes : `X-Agent-ID`, `X-Timestamp` (13 chiffres, millisecondes), `X-Nonce`, `X-Signature`. Chaîne canonique `INFRACTL-HMAC-V1`, méthode, chemin, query, timestamp, nonce, SHA-256 du corps, saut de ligne final. Fenêtre par défaut 60 secondes. Nonce à usage unique. Le passage ultérieur à HTTPS ne change pas cette signature : seul `server.protocol` de l'agent change.
 

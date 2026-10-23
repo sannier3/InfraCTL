@@ -3,18 +3,18 @@
 Infra Manager est un moteur de maintenance contrôlée. Le serveur central est le seul composant qui écoute sur le réseau. Chaque machine surveillée porte un agent qui appelle le serveur. Le serveur n'ouvre jamais de connexion vers un agent.
 
 ```text
-page PHP  --Bearer-->  serveur Fastify  <--HTTP long polling--  agent linux-node
-                              |
-                           MariaDB
+site ou page PHP  --Bearer-->  serveur Fastify  <--HTTP long polling--  agent
+                                        |
+                                     MariaDB
 ```
 
-La page PHP ne parle qu'au serveur. Elle ne parle pas aux agents et ne signe pas de requêtes HMAC.
+Le site et la page PHP parlent au serveur. Ils ne parlent pas aux agents et ne signent pas de requêtes HMAC.
 
 ## Deux programmes
 
 Le serveur (`apps/server`) reçoit l'inventaire, range les métriques et les jobs, et décide quel agent a le droit d'exécuter une action. Il ne lance aucune commande système.
 
-L'agent (`apps/agent`) tourne sur la machine Debian. Dans cette version, seul le type `linux-node` démarre. Il envoie :
+L'agent (`apps/agent`) tourne en `linux-node` sur une VM ou une machine physique, et en `proxmox-node` sur un nœud Proxmox. Un LXC n'a pas d'agent : le nœud exécute l'action avec `pct exec`. Il envoie :
 
 - un heartbeat toutes les 10 secondes ;
 - un inventaire toutes les 30 secondes ;
@@ -36,15 +36,20 @@ Le corps d'une action contient un nom, jamais une commande :
 
 Un champ `command` est refusé. L'agent possède l'implémentation. Pour `apt.check`, il lance un `apt-get` de simulation avec un tableau d'arguments fixe. `system.info` lit le système sans processus shell.
 
-Actions réellement exécutées aujourd'hui :
+Les actions du catalogue sont actives. Les familles :
 
-| Action | Effet |
+| Famille | Effet |
 | --- | --- |
-| `system.info` | Nom d'hôte, noyau, CPU, mémoire, besoin de redémarrage |
-| `apt.check` | Simulation des mises à jour APT, sans installation |
-| `apt.upgrade` | Même simulation, puis `apt-get upgrade` si aucun paquet n'est retiré |
+| `system.info`, `system.rebootRequired` | Lecture de l'état, sans modification |
+| `apt.check`, `apt.packages`, `apt.refresh` | Simulation ou lecture APT. `apt.refresh` modifie les index |
+| `apt.upgrade` | Nouvelle simulation, puis `apt-get upgrade` si aucun paquet n'est retiré |
+| systemd, journal | État, redémarrage d'une unité nommée, extrait de journal |
+| `proxmox.*`, `lxc.*` | Inventaire, ressources et fiche. Réservées au nœud ou au LXC |
+| `runtime.survey` | Ports en écoute, Docker, fichiers Compose dans `/opt`. Ne démarre rien |
+| `agent.update` | Met à jour le programme de l'agent, par le script ou par le serveur |
+| `system.reboot`, `system.shutdown`, `proxmox.host.update` | Actions critiques |
 
-Les actions du catalogue sont actives. Un LXC est exécuté par `pct exec` depuis l'agent `proxmox-node` de son hôte. Une VM passe par son agent `linux-node`.
+Un LXC est exécuté par `pct exec` depuis l'agent `proxmox-node` de son hôte. Une VM passe par son agent `linux-node`.
 
 ## Cycle d'une action
 
