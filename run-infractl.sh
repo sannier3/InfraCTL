@@ -127,8 +127,9 @@ Agent
   --config FICHIER      configuration complète de l'agent. - lit l'entrée
                         standard. Le questionnaire est alors ignoré. Une
                         configuration déjà présente est copiée, puis remplacée.
-  --root DOSSIER        avec --update, doit être le dossier qui contient ce
-                        script. L'action de mise à jour s'en sert.
+  --root DOSSIER        avec --update, dépôt qui contient apps/agent.
+                        Sinon : /opt/infra-agent, puis le dossier du service
+                        infra-agent, puis /opt/infra-manager.
 
 La configuration du serveur est /etc/infra-manager/config.yaml.
 Celle de l'agent est /etc/infra-agent/config.yaml.
@@ -391,19 +392,62 @@ unit_name() {
 }
 
 root_dir() {
-  if [ -n "${ROOT_OVERRIDE:-}" ]; then
-    local script_dir resolved
-    script_dir="$(cd "$(dirname "$0")" && pwd)"
-    resolved="$(cd "$ROOT_OVERRIDE" && pwd)" || die "--root introuvable."
-    [ "$resolved" = "$script_dir" ] || die "--root doit être le dossier qui contient ce script."
-    printf '%s' "$resolved"
-    return
-  fi
   if [ "$MODE" = "server" ]; then
     printf '%s' "$SERVER_ROOT"
   else
     printf '%s' "$AGENT_ROOT"
   fi
+}
+
+checkout_ok() {
+  local dir="$1"
+  [ -d "$dir/.git" ] && [ -f "$dir/apps/agent/package.json" ]
+}
+
+agent_checkout_from_unit() {
+  local unit="/etc/systemd/system/${AGENT_UNIT}.service"
+  [ -f "$unit" ] || return 1
+  local dir exec_path
+  dir="$(sed -n 's/^WorkingDirectory=//p' "$unit" | head -n 1 | tr -d '\r')"
+  if checkout_ok "$dir"; then
+    printf '%s' "$dir"
+    return 0
+  fi
+  exec_path="$(sed -n 's/^ExecStart=//p' "$unit" | head -n 1 | tr -d '\r')"
+  exec_path="${exec_path##* }"
+  case "$exec_path" in
+    */apps/agent/dist/index.js) ;;
+    *) return 1 ;;
+  esac
+  dir="$(dirname "$(dirname "$(dirname "$(dirname "$exec_path")")")")"
+  if checkout_ok "$dir"; then
+    printf '%s' "$dir"
+    return 0
+  fi
+  return 1
+}
+
+agent_checkout() {
+  local resolved=""
+  if [ -n "${ROOT_OVERRIDE:-}" ]; then
+    resolved="$(cd "$ROOT_OVERRIDE" && pwd)" || die "--root introuvable."
+    checkout_ok "$resolved" || die "--root ne contient pas le dépôt de l'agent."
+    printf '%s' "$resolved"
+    return
+  fi
+  if checkout_ok "$AGENT_ROOT"; then
+    printf '%s' "$AGENT_ROOT"
+    return
+  fi
+  if resolved="$(agent_checkout_from_unit)"; then
+    printf '%s' "$resolved"
+    return
+  fi
+  if checkout_ok "$SERVER_ROOT"; then
+    printf '%s' "$SERVER_ROOT"
+    return
+  fi
+  die "Aucun dépôt d'agent dans $AGENT_ROOT. Le service $AGENT_UNIT ne pointe pas non plus vers un dépôt git."
 }
 
 prompt() {
@@ -485,14 +529,24 @@ install_node() {
 
 install_pnpm() {
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-  if [ -x /usr/bin/corepack ]; then
-    /usr/bin/corepack enable
-    /usr/bin/corepack prepare "pnpm@${PNPM_VERSION}" --activate
+  if [ -x /usr/bin/corepack ] && enable_corepack_pnpm && /usr/bin/corepack prepare "pnpm@${PNPM_VERSION}" --activate; then
+    :
   else
+    say "Installation de pnpm par npm."
     npm install -g "pnpm@${PNPM_VERSION}"
   fi
   hash -r || true
   command -v pnpm >/dev/null 2>&1 || die "pnpm n'a pas pu être installé."
+}
+
+enable_corepack_pnpm() {
+  local name
+  for name in yarn yarnpkg pnpm; do
+    if [ -L "/usr/bin/$name" ] && [ ! -e "/usr/bin/$name" ]; then
+      rm -f "/usr/bin/$name"
+    fi
+  done
+  /usr/bin/corepack enable pnpm
 }
 
 pnpm_run() {
@@ -519,6 +573,16 @@ update_repo() {
   local dest="$1"
   [ -d "$dest/.git" ] || die "Aucun dépôt dans $dest. Lancez d'abord --install."
   say "Mise à jour du code. La configuration, les secrets et agent-settings.json ne sont pas modifiés."
+  local running tracked
+  running="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || printf '%s' "$0")"
+  tracked="$dest/run-infractl.sh"
+  if [ -f "$tracked" ]; then
+    local tracked_real
+    tracked_real="$(readlink -f "$tracked" 2>/dev/null || printf '%s' "$tracked")"
+    if [ "$running" != "$tracked_real" ]; then
+      git -c "safe.directory=${dest}" -C "$dest" checkout -- run-infractl.sh || true
+    fi
+  fi
   git -c "safe.directory=${dest}" -C "$dest" fetch origin "$BRANCH"
   git -c "safe.directory=${dest}" -C "$dest" pull --ff-only origin "$BRANCH"
 }
@@ -529,8 +593,17 @@ build_tree() {
   pnpm_run "$dest" install --frozen-lockfile
   if [ "$MODE" = "agent" ]; then
     say "Construction de l'agent."
-    pnpm_run "$dest" -r --filter "./packages/*" build
-    pnpm_run "$dest" --filter "@infra/agent" build
+    pnpm_run "$dest" -r \
+      --filter "@infra/types" \
+      --filter "@infra/schemas" \
+      --filter "@infra/protocol" \
+      --filter "@infra/utils" \
+      --filter "@infra/agent" \
+      build
+    [ -f "$dest/packages/types/dist/index.js" ] || die "Construction incomplète : packages/types"
+    [ -f "$dest/packages/schemas/dist/index.js" ] || die "Construction incomplète : packages/schemas"
+    [ -f "$dest/packages/utils/dist/index.js" ] || die "Construction incomplète : packages/utils"
+    [ -f "$dest/apps/agent/dist/index.js" ] || die "Construction incomplète : apps/agent"
     return
   fi
   say "Génération du client Prisma, puis construction du serveur."
@@ -1845,7 +1918,12 @@ update_mode() {
   install_node
   install_pnpm
   local dest
-  dest="$(root_dir)"
+  if [ "$MODE" = "agent" ]; then
+    dest="$(agent_checkout)"
+  else
+    dest="$(root_dir)"
+  fi
+  say "Dépôt : $dest"
   update_repo "$dest"
   build_tree "$dest"
   if [ "$MODE" = "server" ]; then
