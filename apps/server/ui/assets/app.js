@@ -97,9 +97,16 @@ async function render() {
   const path = location.pathname.replace(/^\/ui/, "") || "/";
   const samePath = path === currentPath;
   currentPath = path;
-  const view = await match(path);
-  if (token !== generation || !app) return;
-  app.innerHTML = shell(view, samePath);
+  try {
+    const view = await match(path);
+    if (token !== generation || !app) return;
+    app.innerHTML = shell(view, samePath);
+  } catch (error) {
+    if (token !== generation || !app) return;
+    const message = error instanceof Error ? error.message : "Affichage impossible";
+    app.innerHTML = shell(pageHeading("Affichage impossible", message, ""), samePath);
+    toast(message);
+  }
 }
 
 function shell(content, calm) {
@@ -181,11 +188,11 @@ async function agents() {
 
 async function machines() {
   const params = new URLSearchParams(location.search);
-  const [items, agentsPage] = await Promise.all([
+  const [items, agents] = await Promise.all([
     allPages("/machines", { includeHidden: params.get("includeHidden") ?? "false", type: params.get("type") ?? "", status: params.get("status") ?? "" }),
-    api("/agents", { query: { limit: 200 } }),
+    allPages("/agents"),
   ]);
-  const agentNames = new Map((agentsPage.data ?? []).map((agent) => [agent.id, agent.name]));
+  const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
   const rows = items.map((machine) => `<tr>
     <td><a href="/ui/machines/${encodeURIComponent(machine.id)}"><strong>${escapeHtml(machine.displayName)}</strong></a><div class="muted">${escapeHtml(machine.hostname)}</div></td>
     <td>${escapeHtml(identityOf(machine))}</td>

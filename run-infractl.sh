@@ -555,6 +555,14 @@ pnpm_run() {
   env -u NODE_ENV -u DATABASE_URL pnpm --dir "$dir" "$@"
 }
 
+generate_prisma() {
+  local dest="$1"
+  [ -f "$dest/apps/server/prisma/schema.prisma" ] || return 0
+  say "Génération du client Prisma."
+  env -u NODE_ENV DATABASE_URL="mysql://prisma:prisma@127.0.0.1:3306/prisma" \
+    pnpm --dir "$dest/apps/server" exec prisma generate
+}
+
 clone_repo() {
   local dest="$1"
   install -d -m 0755 "$(dirname "$dest")"
@@ -606,6 +614,7 @@ build_tree() {
   local dest="$1"
   say "Installation des dépendances et construction."
   pnpm_run "$dest" install --frozen-lockfile
+  generate_prisma "$dest"
   if [ "$MODE" = "agent" ]; then
     say "Construction de l'agent."
     pnpm_run "$dest" -r \
@@ -621,9 +630,7 @@ build_tree() {
     [ -f "$dest/apps/agent/dist/index.js" ] || die "Construction incomplète : apps/agent"
     return
   fi
-  say "Génération du client Prisma, puis construction du serveur."
-  env -u NODE_ENV DATABASE_URL="mysql://prisma:prisma@127.0.0.1:3306/prisma" \
-    pnpm --dir "$dest/apps/server" exec prisma generate
+  say "Construction du serveur."
   pnpm_run "$dest" build
 }
 
