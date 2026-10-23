@@ -35,7 +35,7 @@ const agentTypeFromDb = {
   linux_node: "linux-node",
 } as const;
 
-export async function ensureNodeScopedGuests(prisma: PrismaClient): Promise<void> {
+async function linkIndexNames(prisma: PrismaClient): Promise<Set<string>> {
   const rows = await prisma.$queryRaw<Array<Record<string, unknown>>>`SHOW INDEX FROM MachineProxmoxLink`;
   const names = new Set<string>();
   for (const row of rows) {
@@ -45,14 +45,49 @@ export async function ensureNodeScopedGuests(prisma: PrismaClient): Promise<void
       }
     }
   }
+  return names;
+}
+
+async function clusterForeignKeyExists(prisma: PrismaClient): Promise<boolean> {
+  const rows = await prisma.$queryRaw<Array<{ name: string }>>`
+    SELECT CONSTRAINT_NAME AS name
+    FROM information_schema.TABLE_CONSTRAINTS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'MachineProxmoxLink'
+      AND CONSTRAINT_NAME = 'MachineProxmoxLink_clusterId_fkey'
+  `;
+  return rows.length > 0;
+}
+
+export async function ensureNodeScopedGuests(prisma: PrismaClient): Promise<void> {
+  const names = await linkIndexNames(prisma);
+  const foreignKey = await clusterForeignKeyExists(prisma);
+  const scoped = names.has("MachineProxmoxLink_currentNodeId_vmid_key");
+  const clusterIndex = names.has("MachineProxmoxLink_clusterId_vmid_idx");
+  if (!names.has("MachineProxmoxLink_clusterId_vmid_key") && scoped && clusterIndex && foreignKey) {
+    return;
+  }
+  if (foreignKey) {
+    await prisma.$executeRawUnsafe(
+      "ALTER TABLE `MachineProxmoxLink` DROP FOREIGN KEY `MachineProxmoxLink_clusterId_fkey`",
+    );
+  }
   if (names.has("MachineProxmoxLink_clusterId_vmid_key")) {
     await prisma.$executeRawUnsafe("ALTER TABLE `MachineProxmoxLink` DROP INDEX `MachineProxmoxLink_clusterId_vmid_key`");
   }
-  if (!names.has("MachineProxmoxLink_currentNodeId_vmid_key")) {
+  if (!clusterIndex) {
+    await prisma.$executeRawUnsafe(
+      "CREATE INDEX `MachineProxmoxLink_clusterId_vmid_idx` ON `MachineProxmoxLink`(`clusterId`, `vmid`)",
+    );
+  }
+  if (!scoped) {
     await prisma.$executeRawUnsafe(
       "CREATE UNIQUE INDEX `MachineProxmoxLink_currentNodeId_vmid_key` ON `MachineProxmoxLink`(`currentNodeId`, `vmid`)",
     );
   }
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE `MachineProxmoxLink` ADD CONSTRAINT `MachineProxmoxLink_clusterId_fkey` FOREIGN KEY (`clusterId`) REFERENCES `Cluster`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE",
+  );
 }
 
 export class PrismaStore implements Store {
